@@ -1,13 +1,13 @@
-# User Guide / Guía de Usuario (`Dicebound`)
+# User Guide / Guía de Usuario (`Rollhaven`)
 
 ## 1. Inicio Rápido (Dungeon Master / Host)
 
-1. Descarga el binario correspondiente a tu sistema operativo desde [GitHub Releases](https://github.com/SilverFeit/Dicebound/releases/latest):
-   - **Windows 10/11 (64-bit):** `dicebound-windows-amd64.exe`
-   - **macOS (App Bundle):** `Dicebound-1.0.0-macOS.dmg` (o el binario `dicebound-mac-arm64` / `dicebound-mac-amd64`)
-2. Ejecuta **Dicebound**:
+1. Descarga el binario correspondiente a tu sistema operativo desde [GitHub Releases](https://github.com/SilverFeit/Rollhaven/releases/latest):
+   - **Windows 10/11 (64-bit):** `rollhaven-windows-amd64.exe`
+   - **macOS (App Bundle):** `Rollhaven-1.2.0-macOS.dmg` (o el binario `rollhaven-mac-arm64` / `rollhaven-mac-amd64`)
+2. Ejecuta **Rollhaven**:
    - Se abrirá automáticamente tu navegador en `http://localhost:8080/dm`.
-   - En la terminal y en la cabecera del Dashboard verás la **URL LAN** (ej. `http://192.168.1.45:8080`) y el **PIN de 4 dígitos** (por si quieres abrir `/dm` desde una tablet externa).
+   - En la terminal y en la cabecera del Dashboard verás la **URL LAN** (`https://192.168.x.x:8080` y `http://192.168.x.x:8080`) y el **PIN de 4 dígitos** (por si quieres abrir `/dm` desde una tablet externa).
 3. Muestra el **Código QR** del Dashboard a tus jugadores para que escaneen con la cámara de su celular y entren al instante sin instalar ninguna app.
 
 ---
@@ -17,16 +17,16 @@
 ### Windows Defender Firewall
 Al iniciar la aplicación por primera vez en Windows, el sistema desplegará una alerta de Seguridad de Windows:
 - Marca la casilla **"Redes privadas (como la red doméstica o del trabajo)"** y haz clic en **Permitir acceso**.
-- Si no aparece la alerta y otros celulares no logran entrar a `http://<IP-LAN>:8080`, abre *Firewall de Windows Defender -> Permitir una aplicación* y autoriza `dicebound-windows-amd64.exe` en redes privadas.
+- Si no aparece la alerta y otros celulares no logran entrar a `https://<IP-LAN>:8080`, abre *Firewall de Windows Defender -> Permitir una aplicación* y autoriza `rollhaven-windows-amd64.exe` en redes privadas.
 
 ### macOS Gatekeeper
 Al ser un ejecutable open-source autocompilado sin firma paga de Apple Developer:
-- Haz **clic derecho** sobre `Dicebound.app` (o el binario `dicebound-mac-arm64`) -> **Abrir** -> **Abrir** en el diálogo de confirmación.
+- Haz **clic derecho** sobre `Rollhaven.app` (o el binario `rollhaven-mac-arm64`) -> **Abrir** -> **Abrir** en el diálogo de confirmación.
 - Alternativamente, si descargas el binario CLI por terminal, quita el atributo de cuarentena con:
   ```bash
-  xattr -cr ./dicebound-mac-arm64
-  chmod +x ./dicebound-mac-arm64
-  ./dicebound-mac-arm64
+  xattr -cr ./rollhaven-mac-arm64
+  chmod +x ./rollhaven-mac-arm64
+  ./rollhaven-mac-arm64
   ```
 
 ---

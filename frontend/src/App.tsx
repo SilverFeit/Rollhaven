@@ -59,7 +59,7 @@ const PlayerWorkspace: React.FC = () => {
       <header className="sticky top-0 z-20 border-b border-violet-500/25 bg-[#0e091b]/95 backdrop-blur-md">
         <div className="max-w-4xl mx-auto px-3.5 py-2.5 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <img src="/app-icon.png" alt="Dicebound" className="w-8 h-8 rounded-lg border border-violet-500/40 shrink-0" />
+            <img src="/app-icon.png" alt="Rollhaven" className="w-8 h-8 rounded-lg border border-violet-500/40 shrink-0" />
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
                 <RaceSVG race={currentPlayer.race_icon} color={currentPlayer.color_hex} className="w-4 h-4 shrink-0" />
@@ -202,7 +202,7 @@ const PlayerWorkspace: React.FC = () => {
 
 export function App() {
   const [route, setRoute] = useState<string>(() => window.location.pathname)
-  const [appVersion, setAppVersion] = useState<string>('1.1.2')
+  const [appVersion, setAppVersion] = useState<string>('1.2.0')
   const [appLicense, setAppLicense] = useState<string>('MIT')
 
   useEffect(() => {

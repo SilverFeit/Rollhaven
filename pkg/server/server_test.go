@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SilverFeit/Dicebound/pkg/database"
-	"github.com/SilverFeit/Dicebound/pkg/server"
-	"github.com/SilverFeit/Dicebound/pkg/store"
+	"github.com/SilverFeit/Rollhaven/pkg/database"
+	"github.com/SilverFeit/Rollhaven/pkg/server"
+	"github.com/SilverFeit/Rollhaven/pkg/store"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 )
@@ -75,7 +75,7 @@ func TestHealthAndDMAuth(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		t.Fatal(err)
 	}
-	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Dicebound" || health["version"] != "1.1.2" || health["license"] != "MIT" {
+	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Rollhaven" || health["version"] != "1.2.0" || health["license"] != "MIT" {
 		t.Fatalf("unexpected health response: %+v", health)
 	}
 

@@ -34,11 +34,11 @@ export const PlayerOnboarding: React.FC<PlayerOnboardingProps> = ({ onJoin, conn
         <div className="flex flex-col items-center text-center mb-6">
           <img
             src="/app-icon.png"
-            alt="Dicebound Logo"
+            alt="Rollhaven Logo"
             className="w-20 h-20 rounded-2xl shadow-lg shadow-violet-700/30 border border-violet-500/40 mb-3"
           />
           <h1 className="text-2xl font-extrabold tracking-tight bg-gradient-to-r from-amber-200 via-amber-400 to-violet-300 bg-clip-text text-transparent">
-            DICEBOUND
+            ROLLHAVEN
           </h1>
           <p className="text-xs text-slate-400 mt-1">
             Ingresa tu nombre e iniciativa para entrar a la mesa

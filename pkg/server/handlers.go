@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	appembed "github.com/SilverFeit/Dicebound/pkg/embed"
-	"github.com/SilverFeit/Dicebound/pkg/store"
+	appembed "github.com/SilverFeit/Rollhaven/pkg/embed"
+	"github.com/SilverFeit/Rollhaven/pkg/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
@@ -77,7 +77,7 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 		LanIP:     lanIP,
 		Port:      port,
 		DMPIN:     dmPIN,
-		Version:   "1.1.2",
+		Version:   "1.2.0",
 		TLSConfig: tlsAssets.Config,
 		CACertPEM: tlsAssets.CACertPEM,
 	}
@@ -95,7 +95,7 @@ func (s *Server) isDMAuthorized(r *http.Request) (authorized bool, isLocal bool)
 		pin = strings.TrimSpace(r.URL.Query().Get("pin"))
 	}
 	if pin == "" {
-		if ck, err := r.Cookie("dicebound_dm_pin"); err == nil {
+		if ck, err := r.Cookie("rollhaven_dm_pin"); err == nil {
 			pin = strings.TrimSpace(ck.Value)
 		}
 	}
@@ -171,11 +171,11 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ver := s.Version
 	if ver == "" {
-		ver = "1.1.2"
+		ver = "1.2.0"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
-		"app":     "Dicebound",
+		"app":     "Rollhaven",
 		"version": ver,
 		"license": "MIT",
 		"lan_ip":  s.LanIP,
@@ -189,7 +189,7 @@ func (s *Server) handleDownloadCACert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
-	w.Header().Set("Content-Disposition", `attachment; filename="dicebound-ca.crt"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="rollhaven-ca.crt"`)
 	_, _ = w.Write(s.CACertPEM)
 }
 
@@ -229,7 +229,7 @@ func (s *Server) handleDMAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     "dicebound_dm_pin",
+		Name:     "rollhaven_dm_pin",
 		Value:    s.DMPIN,
 		Path:     "/",
 		HttpOnly: true,

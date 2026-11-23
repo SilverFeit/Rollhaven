@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SilverFeit/Dicebound/pkg/engine"
+	"github.com/SilverFeit/Rollhaven/pkg/engine"
 	"github.com/google/uuid"
 )
 
@@ -72,7 +72,7 @@ type ActionLogEntry struct {
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
-// Store wraps all SQLite reads and writes for Dicebound.
+// Store wraps all SQLite reads and writes for Rollhaven.
 type Store struct {
 	db *sql.DB
 }

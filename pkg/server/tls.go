@@ -34,8 +34,8 @@ func EnsureTLSAssets(dataDir, lanIP string) (*TLSAssets, error) {
 		return nil, fmt.Errorf("create tls dir: %w", err)
 	}
 
-	caCertPath := filepath.Join(tlsDir, "dicebound-ca.crt")
-	caKeyPath := filepath.Join(tlsDir, "dicebound-ca.key")
+	caCertPath := filepath.Join(tlsDir, "rollhaven-ca.crt")
+	caKeyPath := filepath.Join(tlsDir, "rollhaven-ca.key")
 
 	caCert, caKey, caPEM, err := loadOrCreateCA(caCertPath, caKeyPath)
 	if err != nil {
@@ -88,8 +88,8 @@ func loadOrCreateCA(certPath, keyPath string) (*x509.Certificate, *ecdsa.Private
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   "Dicebound Local LAN Root CA",
-			Organization: []string{"Dicebound LAN Suite"},
+			CommonName:   "Rollhaven Local LAN Root CA",
+			Organization: []string{"Rollhaven LAN Suite"},
 		},
 		NotBefore:             now.Add(-1 * time.Hour),
 		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
@@ -141,14 +141,14 @@ func issueServerCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, lanIP st
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   "Dicebound LAN Server",
-			Organization: []string{"Dicebound"},
+			CommonName:   "Rollhaven LAN Server",
+			Organization: []string{"Rollhaven"},
 		},
 		NotBefore:   now.Add(-1 * time.Hour),
 		NotAfter:    now.Add(820 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{"localhost", "dicebound.local"},
+		DNSNames:    []string{"localhost", "rollhaven.local"},
 		IPAddresses: ips,
 	}
 

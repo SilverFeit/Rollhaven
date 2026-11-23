@@ -1,27 +1,27 @@
 <div align="center">
 
-<img src="docs/assets/app-icon.png" alt="Dicebound App Icon" width="124" height="124" />
+<img src="docs/assets/app-icon.png" alt="Rollhaven App Icon" width="124" height="124" />
 
-# Dicebound
+# Rollhaven
 
 **Cross-Platform Single-Binary D&D LAN Companion — 5 Cryptographic Decision Sets, Live Turn & Initiative Tracker, DM Dashboard with QR Onboarding, Character Sheets, Inventory, Notes & 5×5–50×50 HTML5 Canvas Tactical Map**
 
-[![Release](https://img.shields.io/github/v/release/SilverFeit/Dicebound?style=flat-square&label=Download&color=7c3aed)](https://github.com/SilverFeit/Dicebound/releases/latest)
+[![Release](https://img.shields.io/github/v/release/SilverFeit/Rollhaven?style=flat-square&label=Download&color=7c3aed)](https://github.com/SilverFeit/Rollhaven/releases/latest)
 [![Platforms](https://img.shields.io/badge/Platforms-Windows%20x64%20%7C%20macOS%20Universal-f59e0b?style=flat-square)](#download--quick-start)
 [![Backend](https://img.shields.io/badge/Backend-Pure%20Go%20%2B%20SQLite%20(CGO--Free)-10b981?style=flat-square)](#architecture)
 [![Frontend](https://img.shields.io/badge/Frontend-React%2018%20%2B%20TS%20%2B%20Canvas-38bdf8?style=flat-square)](#architecture)
 [![License](https://img.shields.io/badge/License-MIT-6366f1?style=flat-square)](LICENSE)
 
 ```bash
-# Run on macOS / Linux or double-click dicebound-windows-amd64.exe on Windows:
-./dicebound-mac-arm64 -port 8080
+# Run on macOS / Linux or double-click rollhaven-windows-amd64.exe on Windows:
+./rollhaven-mac-arm64 -port 8080
 ```
 
-[**Download Binaries (Windows & macOS)**](https://github.com/SilverFeit/Dicebound/releases/latest) · [**5 Decision Sets**](#5-cryptographic-decision-sets-cryptorand) · [**DM Dashboard & QR**](#dungeon-master-dashboard-dm) · [**Tactical Map (5×5–50×50)**](#tactical-map-canvas-55-to-5050) · [**User Guide**](docs/USER_GUIDE.md) · [**Technical Spec**](docs/SPEC.md) · [**Español**](#-español--resumen-del-proyecto)
+[**Download Binaries (Windows & macOS)**](https://github.com/SilverFeit/Rollhaven/releases/latest) · [**5 Decision Sets**](#5-cryptographic-decision-sets-cryptorand) · [**DM Dashboard & QR**](#dungeon-master-dashboard-dm) · [**Tactical Map (5×5–50×50)**](#tactical-map-canvas-55-to-5050) · [**User Guide**](docs/USER_GUIDE.md) · [**Technical Spec**](docs/SPEC.md) · [**Español**](#-español--resumen-del-proyecto)
 
 <br />
 
-<img src="docs/assets/hero-banner.svg" alt="Dicebound — Single-Binary LAN Companion for Dungeons & Dragons" width="100%" />
+<img src="docs/assets/hero-banner.svg" alt="Rollhaven — Single-Binary LAN Companion for Dungeons & Dragons" width="100%" />
 
 </div>
 
@@ -29,20 +29,20 @@
 
 ## Overview
 
-**Dicebound** is a self-contained local-network (LAN) tabletop companion for **Dungeons & Dragons** packaged as a **single native executable** for **Windows (`.exe`)** and **macOS (`arm64`, `amd64`, `.app` & `.dmg`)** — requiring zero external runtimes (no Node.js, Python, Docker, or CGO compilers).
+**Rollhaven** is a self-contained local-network (LAN) tabletop companion for **Dungeons & Dragons** packaged as a **single native executable** for **Windows (`.exe`)** and **macOS (`arm64`, `amd64`, `.app` & `.dmg`)** — requiring zero external runtimes (no Node.js, Python, Docker, or CGO compilers).
 
-When launched on the Dungeon Master's laptop or desktop, Dicebound automatically:
+When launched on the Dungeon Master's laptop or desktop, Rollhaven automatically:
 1. Detects your active Wi-Fi/Ethernet LAN IPv4 address (filtering out loopback, Docker, VirtualBox, VMWare, WSL, and VPN adapters).
 2. Initializes a pure-Go SQLite database (`data/dnd_companion.db`) via `modernc.org/sqlite`.
-3. Serves the embedded React 18 SPA over HTTP and WebSockets (`/ws`) and opens the **DM Dashboard** (`http://localhost:8080/dm`) automatically.
-4. Generates an interactive **QR code** so every player at the table can join from their phone/tablet browser in seconds by entering just their **Name** and **Initiative**.
+3. Serves the embedded React 18 SPA over HTTP/HTTPS (`ws://` & `wss://` on port `8080`) and opens the **DM Dashboard** (`http://localhost:8080/dm`) automatically.
+4. Generates an interactive **HTTPS QR code** so every player at the table can join from their phone/tablet browser in seconds by entering just their **Name** and **Initiative** — with mobile accelerometer shake & haptic feedback ready.
 
 <details open>
 <summary><strong>🇪🇸 Español — Resumen del Proyecto</strong></summary>
 
 <br />
 
-**Dicebound** es una suite de mesa local (LAN) para **Dungeons & Dragons** compilada en un **único ejecutable nativo para Windows (`.exe`) y macOS (`arm64`/`amd64`, `.app` y `.dmg`)**, sin dependencias externas:
+**Rollhaven** es una suite de mesa local (LAN) para **Dungeons & Dragons** compilada en un **único ejecutable nativo para Windows (`.exe`) y macOS (`arm64`/`amd64`, `.app` y `.dmg`)**, sin dependencias externas:
 
 - **Pantalla de Entrada Minimalista:** Cada jugador en red local entra desde la IP LAN o escaneando el **Código QR** del DM e ingresa únicamente su **Nombre** e **Iniciativa**.
 - **5 Sets de Decisión Criptográficos (`crypto/rand` en Go):**
@@ -62,7 +62,7 @@ When launched on the Dungeon Master's laptop or desktop, Dicebound automatically
 ## Architecture
 
 <div align="center">
-<img src="docs/assets/lan-architecture.svg" alt="Dicebound Architecture: LAN Devices -> Go Single Binary (Embed React + WebSocket Hub + crypto/rand) -> SQLite" width="100%" />
+<img src="docs/assets/lan-architecture.svg" alt="Rollhaven Architecture: LAN Devices -> Go Single Binary (Embed React + WebSocket Hub + crypto/rand) -> SQLite" width="100%" />
 </div>
 
 - **Backend (`cmd/app`, `pkg/*`):** Go + `go-chi/chi/v5` + `coder/websocket` + `modernc.org/sqlite` (CGO-free) + `go:embed` static SPA bundle.
@@ -103,10 +103,10 @@ All randomness is computed server-side in `pkg/engine` using `crypto/rand` (`mat
 
 ## Download & Quick Start
 
-Grab the latest builds from [**Releases**](https://github.com/SilverFeit/Dicebound/releases/latest):
+Grab the latest builds from [**Releases**](https://github.com/SilverFeit/Rollhaven/releases/latest):
 
-- **Windows 10/11 (64-bit):** `dicebound-windows-amd64.exe` (or `Dicebound-1.0.0-windows-amd64.zip`)
-- **macOS (Apple Silicon & Intel):** `Dicebound-1.0.0-macOS.dmg` (Universal `Dicebound.app`) or standalone CLI binaries `dicebound-mac-arm64` / `dicebound-mac-amd64`
+- **Windows 10/11 (64-bit):** `rollhaven-windows-amd64.exe` (or `Rollhaven-1.2.0-windows-amd64.zip`)
+- **macOS (Apple Silicon & Intel):** `Rollhaven-1.2.0-macOS.dmg` (Universal `Rollhaven.app`) or standalone CLI binaries `rollhaven-mac-arm64` / `rollhaven-mac-amd64`
 
 > **Firewall & Gatekeeper Note:** See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for 1-click instructions to allow LAN access in **Windows Defender Firewall** and open unsigned binaries on **macOS Gatekeeper** (`xattr -cr`).
 
@@ -117,6 +117,6 @@ Grab the latest builds from [**Releases**](https://github.com/SilverFeit/Dicebou
 make build-frontend
 make test
 
-# Cross-compile Windows .exe, macOS arm64/amd64, Dicebound.app & .dmg
+# Cross-compile Windows .exe, macOS arm64/amd64, Rollhaven.app & .dmg
 ./Scripts/package_release.sh
 ```

@@ -1,6 +1,6 @@
 # Technical Specification (`docs/SPEC.md`)
 
-**Dicebound** implements the complete architecture defined across `SDD-01` through `SDD-07`:
+**Rollhaven** implements the complete architecture defined across `SDD-01` through `SDD-07`:
 
 1. **Single-Binary Server & Embedded SPA (`pkg/embed`, `cmd/app`):**
    - Compiles React 18 + TypeScript + Tailwind CSS into `frontend/dist` and embeds it into the Go binary via `//go:embed all:frontend_dist`.
@@ -8,7 +8,7 @@
    - Supports CLI flags: `-port` (default `8080`), `-dev`, `-no-browser`, `-data-dir`, `-pin`, `-version`.
 2. **LAN Discovery, Presence & Turn Engine (`pkg/network`, `pkg/server`, `pkg/engine/turns.go`):**
    - `GetLocalIP()` enumerates active interfaces while filtering loopback, Docker, VirtualBox, VMWare, veth, WSL, and VPN interfaces.
-   - `/ws` WebSocket hub (`github.com/coder/websocket`) runs a 15-second PING/PONG heartbeat measuring client RTT latency (`latency_ms`) and preserves turn order across mobile screen locks using `localStorage` (`dicebound_player_id`).
+   - `/ws` WebSocket hub (`github.com/coder/websocket`) runs a 15-second PING/PONG heartbeat measuring client RTT latency (`latency_ms`) and preserves turn order across mobile screen locks using `localStorage` (`rollhaven_player_id`).
    - Turn order sorts players descending by `initiative` with sub-millisecond `created_at` tie-breaking (or manual DM drag-and-drop `turn_order`). Active players can trigger unlimited rolls across all 5 decision sets until clicking **Pasar Turno**.
 3. **Cryptographic Decision Engines (`pkg/engine`):**
    - Zero `math/rand` imports (verified by `TestNoMathRandInEngine`). All draws use `crypto/rand.Int`.

@@ -1,5 +1,5 @@
 Param(
-    [string]$Version = "1.0.0"
+    [string]$Version = "1.2.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,12 +19,12 @@ Write-Host "[2/3] Running Go Tests..."
 Push-Location $RootDir
 go test -v ./...
 
-Write-Host "[3/3] Building dicebound-windows-amd64.exe..."
+Write-Host "[3/3] Building rollhaven-windows-amd64.exe..."
 New-Item -ItemType Directory -Force -Path (Join-Path $RootDir "dist\bin") | Out-Null
 $env:CGO_ENABLED = "0"
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
-go build -trimpath -ldflags="-s -w -X main.version=$Version" -o (Join-Path $RootDir "dist\bin\dicebound-windows-amd64.exe") .\cmd\app
+go build -trimpath -ldflags="-s -w -X main.version=$Version" -o (Join-Path $RootDir "dist\bin\rollhaven-windows-amd64.exe") .\cmd\app
 Pop-Location
 
-Write-Host "[OK] Built dist\bin\dicebound-windows-amd64.exe"
+Write-Host "[OK] Built dist\bin\rollhaven-windows-amd64.exe"

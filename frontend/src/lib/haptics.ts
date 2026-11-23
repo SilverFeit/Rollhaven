@@ -1,4 +1,4 @@
-// Cross-platform tactile/haptic feedback helper for Dicebound:
+// Cross-platform tactile/haptic feedback helper for Rollhaven:
 // 1. Android / Web Vibration API (`navigator.vibrate`)
 // 2. iOS Safari 17.4+ native Taptic Engine (`<input type="checkbox" switch />` via label click)
 // 3. Subtle low-frequency WebAudio sub-bass thud unlocked on user gesture so every device gets tactile feedback
@@ -18,7 +18,7 @@ function ensureIOSSwitchHook() {
 
     const input = document.createElement('input')
     input.type = 'checkbox'
-    input.id = 'dicebound-ios-haptic-switch'
+    input.id = 'rollhaven-ios-haptic-switch'
     input.setAttribute('switch', '')
 
     const label = document.createElement('label')

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SilverFeit/Dicebound/pkg/engine"
-	"github.com/SilverFeit/Dicebound/pkg/store"
+	"github.com/SilverFeit/Rollhaven/pkg/engine"
+	"github.com/SilverFeit/Rollhaven/pkg/store"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 )
@@ -275,7 +275,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	role := r.URL.Query().Get("role")
 	pin := r.URL.Query().Get("pin")
 	if pin == "" {
-		if ck, err := r.Cookie("dicebound_dm_pin"); err == nil {
+		if ck, err := r.Cookie("rollhaven_dm_pin"); err == nil {
 			pin = ck.Value
 		}
 	}

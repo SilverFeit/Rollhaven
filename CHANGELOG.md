@@ -1,6 +1,15 @@
 # Changelog
 
-All notable changes to **Dicebound** are documented in this file.
+All notable changes to **Rollhaven** (formerly Dicebound) are documented in this file.
+
+## [1.2.0] — 2026-11-23
+
+### Changed & Added
+- **Rebrand to Rollhaven (`github.com/SilverFeit/Rollhaven`):**
+  - Renamed application, Go module, Windows/macOS executables (`rollhaven-windows-amd64.exe`, `rollhaven-mac-arm64`, `rollhaven-mac-amd64`, `Rollhaven.app`, `Rollhaven-1.2.0-macOS.dmg`), TLS Root CA (`rollhaven-ca.crt`), cookies (`rollhaven_dm_pin`), and UI branding across all views to **Rollhaven**.
+  - Updated GitHub repository to `SilverFeit/Rollhaven` with discovery topics/tags (`dnd`, `dungeons-and-dragons`, `dice-roller`, `tabletop-rpg`, `ttrpg`, `virtual-tabletop`, `lan`, `golang`, `react`, `typescript`, `sqlite`, `websockets`, `html5-canvas`, `windows`, `macos`, `open-source`, `rollhaven`).
+
+---
 
 ## [1.1.2] — 2026-11-23
 

@@ -23,7 +23,7 @@
 
   <!-- Center: Single Binary Host -->
   <rect x="398" y="32" width="320" height="256" rx="14" fill="#1b1136" stroke="#f59e0b" stroke-width="2"/>
-  <text x="558" y="64" text-anchor="middle" fill="#fde68a" font-family="sans-serif" font-weight="bold" font-size="16">Ejecutable Único Dicebound</text>
+  <text x="558" y="64" text-anchor="middle" fill="#fde68a" font-family="sans-serif" font-weight="bold" font-size="16">Ejecutable Único Rollhaven</text>
   <text x="558" y="86" text-anchor="middle" fill="#c4b5fd" font-family="monospace" font-size="11.5">Windows (.exe) · macOS (arm64 / amd64)</text>
   <rect x="422" y="104" width="272" height="38" rx="8" fill="#090712" stroke="#7c3aed"/>
   <text x="558" y="128" text-anchor="middle" fill="#e2e8f0" font-family="monospace" font-size="12">go:embed React SPA + Router Chi</text>

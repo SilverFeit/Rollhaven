@@ -1,4 +1,4 @@
-module github.com/SilverFeit/Dicebound
+module github.com/SilverFeit/Rollhaven
 
 go 1.27.4
 

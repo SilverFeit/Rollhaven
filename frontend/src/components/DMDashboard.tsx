@@ -240,12 +240,12 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
       <header className="sticky top-0 z-30 border-b border-violet-500/25 bg-[#0e091b]/95 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <img src="/app-icon.png" alt="Dicebound" className="w-9 h-9 rounded-xl border border-violet-500/40" />
+            <img src="/app-icon.png" alt="Rollhaven" className="w-9 h-9 rounded-xl border border-violet-500/40" />
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-base sm:text-lg font-extrabold tracking-tight text-amber-200 flex items-center gap-1.5">
                   <Crown className="w-4 h-4 text-amber-400" />
-                  DICEBOUND — DM DASHBOARD
+                  ROLLHAVEN — DM DASHBOARD
                 </h1>
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${

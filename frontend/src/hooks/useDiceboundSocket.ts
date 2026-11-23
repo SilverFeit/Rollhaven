@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RollBroadcast, StateSnapshot, WSMessage } from '../types'
 
-const STORAGE_PLAYER_ID_KEY = 'dicebound_player_id'
+const STORAGE_PLAYER_ID_KEY = 'rollhaven_player_id'
 
 export interface UseDiceboundOptions {
   isDM?: boolean

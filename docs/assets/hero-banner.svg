@@ -17,16 +17,16 @@
   <rect x="48" y="36" width="490" height="30" rx="15" fill="#2e1065" stroke="#a78bfa" stroke-width="1.5"/>
   <text x="293" y="56" text-anchor="middle" fill="#fde68a" font-family="sans-serif" font-weight="bold" font-size="12">SINGLE BINARY LAN SUITE • GO + REACT + SQLITE • WINDOWS &amp; MACOS</text>
 
-  <text x="48" y="114" fill="#f8fafc" font-family="sans-serif" font-weight="800" font-size="46">Dicebound</text>
+  <text x="48" y="114" fill="#f8fafc" font-family="sans-serif" font-weight="800" font-size="46">Rollhaven</text>
   <text x="48" y="152" fill="#c4b5fd" font-family="sans-serif" font-weight="600" font-size="19">D&amp;D LAN Companion: 5 Sets de Decisión, Turnos, Notas, Hojas &amp; Mapa Táctico</text>
 
-  <text x="48" y="196" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• Dados d2–d100, Moneda real (1/6000 canto), Magic 8 Ball, Peonza (4–12) &amp; Ruleta</text>
-  <text x="48" y="224" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• DM Dashboard (/dm) con QR LAN, latencia en vivo, override de iniciativa y log</text>
+  <text x="48" y="196" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• Dados d2–d100 (1:1 colisiones + agitar), Moneda (1/6000), Magic 8, Peonza 3D &amp; Ruleta</text>
+  <text x="48" y="224" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• DM Dashboard (/dm) con QR HTTPS/HTTP, latencia en vivo, iniciativa y log global</text>
   <text x="48" y="252" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• Mapa HTML5 Canvas 5×5 a 50×50 opcional, razas SVG, hoja PDF/IMG e inventario</text>
   <text x="48" y="280" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• Ejecutable único CGO-free (modernc.org/sqlite + go:embed) sin instalar nada</text>
 
   <rect x="48" y="308" width="540" height="42" rx="10" fill="#090712" stroke="#f59e0b" stroke-width="1.5"/>
-  <text x="68" y="334" fill="#fde68a" font-family="monospace" font-size="14">&gt; dicebound -port 8080   |   http://192.168.x.x:8080   |   /dm</text>
+  <text x="68" y="334" fill="#fde68a" font-family="monospace" font-size="14">&gt; rollhaven -port 8080   |   https://192.168.x.x:8080   |   /dm</text>
 
   <!-- Right Preview Card -->
   <rect x="642" y="34" width="514" height="312" rx="14" fill="#0c0818" stroke="#5b21b6" stroke-width="2"/>

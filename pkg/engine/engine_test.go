@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SilverFeit/Dicebound/pkg/engine"
+	"github.com/SilverFeit/Rollhaven/pkg/engine"
 )
 
 func TestNoMathRandInEngine(t *testing.T) {

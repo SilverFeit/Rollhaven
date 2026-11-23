@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/go/bin:${PATH}"
 
-DEFAULT_VER="$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION" 2>/dev/null || echo "1.0.0")"
+DEFAULT_VER="$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION" 2>/dev/null || echo "1.2.0")"
 VERSION="${1:-${DEFAULT_VER}}"
 
 BIN_DIR="${ROOT_DIR}/dist/bin"
@@ -32,12 +32,12 @@ echo "[2/5] Running Go Vet & Unit / Monte Carlo / WebSocket Tests..."
     go test -v -race ./...
 )
 
-echo "[3/5] Cross-compiling Windows x64 binary (dicebound-windows-amd64.exe)..."
+echo "[3/5] Cross-compiling Windows x64 binary (rollhaven-windows-amd64.exe)..."
 (
     cd "${ROOT_DIR}"
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION}" \
-        -o "${BIN_DIR}/dicebound-windows-amd64.exe" ./cmd/app
+        -o "${BIN_DIR}/rollhaven-windows-amd64.exe" ./cmd/app
 )
 
 echo "[4/5] Cross-compiling macOS Apple Silicon (arm64) & Intel (amd64) binaries..."
@@ -45,26 +45,25 @@ echo "[4/5] Cross-compiling macOS Apple Silicon (arm64) & Intel (amd64) binaries
     cd "${ROOT_DIR}"
     CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION}" \
-        -o "${BIN_DIR}/dicebound-mac-arm64" ./cmd/app
+        -o "${BIN_DIR}/rollhaven-mac-arm64" ./cmd/app
     CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION}" \
-        -o "${BIN_DIR}/dicebound-mac-amd64" ./cmd/app
+        -o "${BIN_DIR}/rollhaven-mac-amd64" ./cmd/app
 )
 
-echo "[5/5] Assembling macOS Universal App Bundle (Dicebound.app)..."
-APP_BUNDLE="${ROOT_DIR}/dist/Dicebound.app"
-STAGE_APP="/tmp/DiceboundAppStage.app"
+echo "[5/5] Assembling macOS Universal App Bundle (Rollhaven.app)..."
+APP_BUNDLE="${ROOT_DIR}/dist/Rollhaven.app"
+STAGE_APP="/tmp/RollhavenAppStage.app"
 rm -rf "${APP_BUNDLE}" "${STAGE_APP}"
 mkdir -p "${STAGE_APP}/Contents/MacOS" "${STAGE_APP}/Contents/Resources"
 
-# Create Universal macOS binary when lipo is available (on macOS runners), else copy arm64/amd64
 if command -v lipo >/dev/null 2>&1; then
-    lipo -create -output "${STAGE_APP}/Contents/MacOS/Dicebound" \
-        "${BIN_DIR}/dicebound-mac-arm64" "${BIN_DIR}/dicebound-mac-amd64"
+    lipo -create -output "${STAGE_APP}/Contents/MacOS/Rollhaven" \
+        "${BIN_DIR}/rollhaven-mac-arm64" "${BIN_DIR}/rollhaven-mac-amd64"
 else
-    cp "${BIN_DIR}/dicebound-mac-arm64" "${STAGE_APP}/Contents/MacOS/Dicebound"
+    cp "${BIN_DIR}/rollhaven-mac-arm64" "${STAGE_APP}/Contents/MacOS/Rollhaven"
 fi
-chmod 755 "${STAGE_APP}/Contents/MacOS/Dicebound"
+chmod 755 "${STAGE_APP}/Contents/MacOS/Rollhaven"
 
 if [[ -f "${ROOT_DIR}/Scripts/AppIcon.icns" ]]; then
     cp "${ROOT_DIR}/Scripts/AppIcon.icns" "${STAGE_APP}/Contents/Resources/AppIcon.icns"
@@ -78,17 +77,17 @@ cat << EOF > "${STAGE_APP}/Contents/Info.plist"
     <key>CFBundleDevelopmentRegion</key>
     <string>es</string>
     <key>CFBundleDisplayName</key>
-    <string>Dicebound</string>
+    <string>Rollhaven</string>
     <key>CFBundleExecutable</key>
-    <string>Dicebound</string>
+    <string>Rollhaven</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>com.silverfeit.dicebound</string>
+    <string>com.silverfeit.rollhaven</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Dicebound</string>
+    <string>Rollhaven</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

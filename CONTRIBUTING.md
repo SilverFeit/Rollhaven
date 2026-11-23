@@ -1,6 +1,6 @@
-# Contributing to Dicebound
+# Contributing to Rollhaven
 
-Thank you for contributing to **Dicebound**!
+Thank you for contributing to **Rollhaven**!
 
 ## Development Workflow
 
@@ -13,7 +13,7 @@ make build-frontend
 # 2. Run all unit, Monte Carlo, and multi-client WebSocket tests
 make test
 
-# 3. Build Windows x64, macOS arm64/amd64, Dicebound.app & .dmg release artifacts
+# 3. Build Windows x64, macOS arm64/amd64, Rollhaven.app & .dmg release artifacts
 ./Scripts/package_release.sh
 ```
 

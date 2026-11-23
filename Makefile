@@ -1,7 +1,7 @@
 .PHONY: all test build-frontend build-win build-mac package clean
 
-APP_NAME=dicebound
-VERSION=$(shell tr -d '[:space:]' < VERSION 2>/dev/null || echo "1.0.0")
+APP_NAME=rollhaven
+VERSION=$(shell tr -d '[:space:]' < VERSION 2>/dev/null || echo "1.2.0")
 
 all: clean build-frontend build-win build-mac
 

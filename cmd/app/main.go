@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/SilverFeit/Dicebound/pkg/database"
-	"github.com/SilverFeit/Dicebound/pkg/network"
-	"github.com/SilverFeit/Dicebound/pkg/server"
-	"github.com/SilverFeit/Dicebound/pkg/store"
+	"github.com/SilverFeit/Rollhaven/pkg/database"
+	"github.com/SilverFeit/Rollhaven/pkg/network"
+	"github.com/SilverFeit/Rollhaven/pkg/server"
+	"github.com/SilverFeit/Rollhaven/pkg/store"
 )
 
-var version = "1.1.2"
+var version = "1.2.0"
 
 func main() {
 	port := flag.Int("port", 8080, "Puerto HTTP/WebSocket local del servidor")
@@ -33,7 +33,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("Dicebound v%s\n", version)
+		fmt.Printf("Rollhaven v%s\n", version)
 		return
 	}
 
@@ -102,7 +102,7 @@ func main() {
 	case err := <-errCh:
 		log.Fatalf("Error del servidor HTTP: %v", err)
 	case sig := <-sigCh:
-		fmt.Printf("\nSeñal recibida (%v). Cerrando Dicebound...\n", sig)
+		fmt.Printf("\nSeñal recibida (%v). Cerrando Rollhaven...\n", sig)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(ctx)
@@ -127,13 +127,13 @@ func resolveDataDir(flagVal string) string {
 	}
 	home, err := os.UserHomeDir()
 	if err == nil {
-		return filepath.Join(home, "DiceboundData")
+		return filepath.Join(home, "RollhavenData")
 	}
 	return "./data"
 }
 
 func isDirWritable(dir string) bool {
-	tmp, err := os.CreateTemp(dir, ".dicebound_write_check_*")
+	tmp, err := os.CreateTemp(dir, ".rollhaven_write_check_*")
 	if err != nil {
 		return false
 	}
@@ -145,7 +145,7 @@ func isDirWritable(dir string) bool {
 
 func printBanner(lanURL, httpsURL, dmURL, pin, dataDir string) {
 	fmt.Println("================================================================")
-	fmt.Printf("  DICEBOUND v%s — D&D Companion LAN Suite\n", version)
+	fmt.Printf("  ROLLHAVEN v%s — D&D Companion LAN Suite\n", version)
 	fmt.Println("================================================================")
 	fmt.Printf("  [DM Dashboard Local]  : %s\n", dmURL)
 	fmt.Printf("  [URL Jugadores HTTP]  : %s\n", lanURL)
