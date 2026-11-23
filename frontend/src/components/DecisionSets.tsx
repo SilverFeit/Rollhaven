@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Coins, Dices, Disc3, HelpCircle, Plus, RotateCw, Sparkles, Trash2 } from 'lucide-react'
-import { CoinDetail, DiceDetail, Magic8Detail, RollBroadcast, SpinnerDetail, WheelDetail } from '../types'
+import { CoinDetail, DiceDetail, Magic8Detail, RollBroadcast, WheelDetail } from '../types'
+import { DicePhysicsArena } from './DicePhysicsArena'
+import { PeonzaArenaCanvas } from './PeonzaArenaCanvas'
 
 interface DecisionSetsProps {
   onRoll: (payload: Record<string, unknown>) => void
@@ -46,10 +48,14 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<SetTab>('DICE')
 
-  // Set 1: Dice state
-  const [diceCount, setDiceCount] = useState(1)
+  // Set 1: Dice state + 1:1 physical arena hold-to-shake state
+  const [diceCount, setDiceCount] = useState(2)
   const [diceMod, setDiceMod] = useState(0)
-  const [customNotation, setCustomNotation] = useState('1d20+3')
+  const [selectedSides, setSelectedSides] = useState<number>(20)
+  const [holdingDiceBtn, setHoldingDiceBtn] = useState(false)
+  const [customNotation, setCustomNotation] = useState('2d20+0')
+  const diceHoldTimerRef = useRef<number | null>(null)
+  const activeHoldSidesRef = useRef<number | null>(null)
 
   // Set 2: Coin animation
   const [coinAnimating, setCoinAnimating] = useState(false)
@@ -62,12 +68,8 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
   // Set 4: Peonza (4-12 faces)
   const [spinnerFaces, setSpinnerFaces] = useState<string[]>(DEFAULT_SPINNER_FACES)
   const [newSpinnerFace, setNewSpinnerFace] = useState('')
-  const [spinnerRotation, setSpinnerRotation] = useState(0)
-  const [spinnerSpinning, setSpinnerSpinning] = useState(false)
-  const [spinnerRevealedLabel, setSpinnerRevealedLabel] = useState<string | null>(null)
-  const lastSpinnerHandledID = useRef<number>(0)
 
-  // Set 5: Ruleta de Decisión
+  // Set 5: Ruleta de Decisión (top-down view)
   const [wheelOptions, setWheelOptions] = useState<string[]>(DEFAULT_WHEEL_OPTIONS)
   const [newWheelOption, setNewWheelOption] = useState('')
   const [wheelRotation, setWheelRotation] = useState(0)
@@ -77,34 +79,13 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
 
   const targetOwnerID = asDM ? 'dm' : localPlayerID
 
-  // Animate Spinner when server returns a SPINNER result
   useEffect(() => {
-    if (!lastBroadcast || lastBroadcast.set_type !== 'SPINNER') return
-    if (lastBroadcast.id === lastSpinnerHandledID.current) return
-    lastSpinnerHandledID.current = lastBroadcast.id
-
-    const detail = lastBroadcast.detail as SpinnerDetail
-    if (!detail || typeof detail.winning_index !== 'number' || !detail.faces?.length) return
-
-    const n = detail.faces.length
-    const sliceAngle = 360 / n
-    const centerAngle = (detail.winning_index + 0.5) * sliceAngle
-    const targetMod = (360 - (centerAngle % 360)) % 360
-
-    setSpinnerSpinning(true)
-    setSpinnerRevealedLabel(null)
-    setSpinnerRotation((prev) => {
-      const base = prev + 1800
-      const delta = (targetMod - (base % 360) + 360) % 360
-      return base + delta
-    })
-
-    const timer = window.setTimeout(() => {
-      setSpinnerSpinning(false)
-      setSpinnerRevealedLabel(detail.label)
-    }, 2500)
-    return () => window.clearTimeout(timer)
-  }, [lastBroadcast])
+    return () => {
+      if (diceHoldTimerRef.current) {
+        window.clearTimeout(diceHoldTimerRef.current)
+      }
+    }
+  }, [])
 
   // Animate Wheel when server returns a WHEEL result
   useEffect(() => {
@@ -136,10 +117,44 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
   }, [lastBroadcast])
 
   const triggerDice = (sides: number) => {
+    setSelectedSides(sides)
     const modSuffix = diceMod > 0 ? `+${diceMod}` : diceMod < 0 ? `${diceMod}` : ''
     const notation = `${diceCount}d${sides}${modSuffix}`
     setCustomNotation(notation)
     onRoll({ type: 'DICE', dice_notation: notation, as_dm: asDM })
+  }
+
+  const handleDieBtnDown = (sides: number, e: React.PointerEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    setSelectedSides(sides)
+    activeHoldSidesRef.current = sides
+    if (diceHoldTimerRef.current) window.clearTimeout(diceHoldTimerRef.current)
+    diceHoldTimerRef.current = window.setTimeout(() => {
+      setHoldingDiceBtn(true)
+    }, 150)
+  }
+
+  const handleDieBtnUp = (sides: number) => {
+    if (diceHoldTimerRef.current) {
+      window.clearTimeout(diceHoldTimerRef.current)
+      diceHoldTimerRef.current = null
+    }
+    if (activeHoldSidesRef.current !== sides) return
+    activeHoldSidesRef.current = null
+    setHoldingDiceBtn(false)
+    if (!disabled) {
+      triggerDice(sides)
+    }
+  }
+
+  const handleDieBtnCancel = () => {
+    if (diceHoldTimerRef.current) {
+      window.clearTimeout(diceHoldTimerRef.current)
+      diceHoldTimerRef.current = null
+    }
+    activeHoldSidesRef.current = null
+    setHoldingDiceBtn(false)
   }
 
   const triggerCustomDice = (e: React.FormEvent) => {
@@ -179,7 +194,6 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
   const latestDice = lastBroadcast?.set_type === 'DICE' ? (lastBroadcast.detail as DiceDetail) : null
   const latestCoin = lastBroadcast?.set_type === 'COIN' ? (lastBroadcast.detail as CoinDetail) : null
   const latestMagic8 = lastBroadcast?.set_type === 'MAGIC_8_BALL' ? (lastBroadcast.detail as Magic8Detail) : null
-  const activeSpinnerFaces = spinnerFaces
   const activeWheelOptions = wheelOptions
 
   const tabs: { id: SetTab; label: string; icon: React.ReactNode }[] = [
@@ -263,24 +277,43 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
             </div>
           </div>
 
+          {/* 1:1 Physical Dice Arena with Wall & Die-to-Die Collisions, Hold-to-Shake & Phone Shake */}
+          <DicePhysicsArena
+            selectedSides={selectedSides}
+            diceCount={diceCount}
+            externalHolding={holdingDiceBtn}
+            disabled={disabled}
+            lastBroadcast={lastBroadcast}
+            onRollCompleteRequest={(sides) => triggerDice(sides)}
+          />
+
           <div className="grid grid-cols-4 gap-2 sm:gap-2.5">
-            {STANDARD_DICE.map((sides) => (
-              <button
-                key={sides}
-                type="button"
-                disabled={disabled}
-                onClick={() => triggerDice(sides)}
-                className="group relative overflow-hidden rounded-xl border border-violet-500/30 bg-gradient-to-b from-[#1a1233] to-[#0e0a1c] hover:border-amber-400/70 hover:from-violet-900/50 hover:to-[#140e29] p-3 text-center transition active:scale-95 disabled:opacity-45"
-              >
-                <div className="text-base sm:text-lg font-extrabold text-amber-200 group-hover:text-amber-300 font-mono">
-                  d{sides}
-                </div>
-                <div className="text-[10px] text-slate-400 mt-0.5">
-                  {diceCount}d{sides}
-                  {diceMod !== 0 ? (diceMod > 0 ? `+${diceMod}` : diceMod) : ''}
-                </div>
-              </button>
-            ))}
+            {STANDARD_DICE.map((sides) => {
+              const isSelected = selectedSides === sides
+              return (
+                <button
+                  key={sides}
+                  type="button"
+                  disabled={disabled}
+                  onPointerDown={(e) => handleDieBtnDown(sides, e)}
+                  onPointerUp={() => handleDieBtnUp(sides)}
+                  onPointerCancel={handleDieBtnCancel}
+                  className={`group relative overflow-hidden rounded-xl border p-3 text-center transition active:scale-95 disabled:opacity-45 touch-none select-none ${
+                    isSelected
+                      ? 'border-amber-400/80 bg-gradient-to-b from-violet-900/60 to-[#140e29] shadow-md shadow-amber-950/40'
+                      : 'border-violet-500/30 bg-gradient-to-b from-[#1a1233] to-[#0e0a1c] hover:border-amber-400/60'
+                  }`}
+                >
+                  <div className="text-base sm:text-lg font-extrabold text-amber-200 group-hover:text-amber-300 font-mono">
+                    d{sides}
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    {diceCount}d{sides}
+                    {diceMod !== 0 ? (diceMod > 0 ? `+${diceMod}` : diceMod) : ''}
+                  </div>
+                </button>
+              )
+            })}
           </div>
 
           <form onSubmit={triggerCustomDice} className="flex gap-2">
@@ -454,73 +487,15 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
         </div>
       )}
 
-      {/* SET 4: PEONZA PERSONALIZABLE (4-12 FACES) */}
+      {/* SET 4: PEONZA 3D EN PERSPECTIVA CON REBOTES (4-12 CARAS) */}
       {activeTab === 'SPINNER' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
-          <div className="flex flex-col items-center space-y-3">
-            <div className="relative w-52 h-52 flex items-center justify-center">
-              {/* Top Pointer */}
-              <div className="absolute -top-1 left-1/2 -translate-x-1/2 z-10 w-0 h-0 border-l-[10px] border-r-[10px] border-t-[16px] border-l-transparent border-r-transparent border-t-amber-400 drop-shadow" />
-              <svg
-                viewBox="0 0 220 220"
-                className="w-48 h-48 drop-shadow-xl"
-                style={{
-                  transform: `rotate(${spinnerRotation}deg)`,
-                  transition: 'transform 2.5s cubic-bezier(0.15, 0.85, 0.25, 1)',
-                }}
-              >
-                {activeSpinnerFaces.map((face, i) => {
-                  const n = activeSpinnerFaces.length
-                  const angle = 360 / n
-                  const start = i * angle
-                  const end = (i + 1) * angle
-                  const mid = start + angle / 2
-                  const labelPt = polarToCartesian(110, 110, 64, mid)
-                  return (
-                    <g key={i}>
-                      <path
-                        d={describeSlice(110, 110, 98, start, end)}
-                        fill={WHEEL_COLORS[i % WHEEL_COLORS.length]}
-                        stroke="#090712"
-                        strokeWidth="2.5"
-                      />
-                      <text
-                        x={labelPt.x}
-                        y={labelPt.y}
-                        fill="#ffffff"
-                        fontSize={n > 8 ? '8.5' : '10'}
-                        fontWeight="bold"
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        transform={`rotate(${mid}, ${labelPt.x}, ${labelPt.y})`}
-                      >
-                        {face.length > 12 ? `${face.slice(0, 11)}…` : face}
-                      </text>
-                    </g>
-                  )
-                })}
-                {/* Pirinola center spindle */}
-                <circle cx="110" cy="110" r="18" fill="#110c21" stroke="#fbbf24" strokeWidth="3" />
-                <circle cx="110" cy="110" r="6" fill="#fde68a" />
-              </svg>
-            </div>
-
-            <button
-              type="button"
-              disabled={disabled || spinnerSpinning || spinnerFaces.length < 4}
-              onClick={triggerSpinner}
-              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-amber-500 hover:from-violet-500 hover:to-amber-400 text-white font-bold text-sm shadow-lg transition disabled:opacity-45"
-            >
-              {spinnerSpinning ? 'Girando Peonza...' : `Girar Peonza (${spinnerFaces.length} caras)`}
-            </button>
-
-            {spinnerRevealedLabel && (
-              <div className="text-sm font-extrabold text-amber-200 flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                Cayó en: {spinnerRevealedLabel}
-              </div>
-            )}
-          </div>
+          <PeonzaArenaCanvas
+            faces={spinnerFaces}
+            lastBroadcast={lastBroadcast}
+            disabled={disabled}
+            onSpin={triggerSpinner}
+          />
 
           {/* Faces Editor (4 to 12 faces) */}
           <div className="bg-[#090712]/70 rounded-xl p-3 border border-violet-500/20 space-y-2.5">

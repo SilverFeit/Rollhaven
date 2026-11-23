@@ -76,11 +76,11 @@ All randomness is computed server-side in `pkg/engine` using `crypto/rand` (`mat
 
 | Set | Capability | Implementation |
 |---|---|---|
-| **1. Polyhedral Dice** | `d2`, `d4`, `d6`, `d8`, `d10`, `d12`, `d20`, `d100` + `NdX+M` | `pkg/engine/dice.go` (Nat 20 crit & Nat 1 fumble highlight) |
+| **1. Polyhedral Dice** | `d2`, `d4`, `d6`, `d8`, `d10`, `d12`, `d20`, `d100` + `NdX+M` + `1:1` collision tray (hold-to-shake & phone shake) | `pkg/engine/dice.go`, `DicePhysicsArena.tsx` |
 | **2. Physics Coin** | Cara (`5999/12000`), Cruz (`5999/12000`), **Canto (`1/6000`)** | `pkg/engine/coin.go` (validated with 600,000-iteration Monte Carlo test) |
 | **3. Magic 8 Ball** | 20 classic answers (10/5/5) + 50/50 Strict Yes/No mode | `pkg/engine/magic8.go` |
-| **4. Peonza (4–12 Faces)** | 6-face preset + custom 4–12 face editor + 2.5s spin sync | `pkg/engine/spinner.go` |
-| **5. Decision Wheel** | 2–24 custom colored wedges + 2.5s spin sync | `pkg/engine/wheel.go` |
+| **4. Peonza (4–12 Faces)** | 3D perspective bouncing top (wall speed decay, 4–12 faces) | `pkg/engine/spinner.go`, `PeonzaArenaCanvas.tsx` |
+| **5. Decision Wheel** | Top-down 2–24 custom colored wedges + 2.5s spin sync | `pkg/engine/wheel.go` |
 
 ---
 

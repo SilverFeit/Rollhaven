@@ -2,6 +2,19 @@
 
 All notable changes to **Dicebound** are documented in this file.
 
+## [1.1.0] — 2026-11-23
+
+### Added
+- **3D Perspective Bouncing Peonza Arena (`frontend/src/components/PeonzaArenaCanvas.tsx`):**
+  - Renders the Peonza / Pirinola in true 3D perspective (conical tip, beveled polygonal facet drum for 4–12 faces, precession wobble, and upper stem) clearly distinct from the top-down Ruleta.
+  - Moves along a randomized trajectory inside a perspective bounding box, deflecting randomly on wall bounces while decreasing both linear velocity and spin speed on every impact until tilting onto the server-determined winning face.
+- **1:1 Physical Dice Arena (`frontend/src/components/DicePhysicsArena.tsx`):**
+  - Dedicated `1:1` square HTML5 `<canvas>` dice tray (`d2`, `d4`, `d6`, `d8`, `d10`, `d12`, `d20`, `d100`) with polyhedral shapes, wall bounces, and elastic die-to-die collisions.
+  - **Hold-to-Shake ("Batir los dados"):** Holding on the `1:1` tray, the shake button, or any `d2..d100` button continuously swirls and collides the dice until release.
+  - **Mobile Accelerometer Shake Gesture (`DeviceMotionEvent`):** Supports shaking the phone (`Agitar Celular` with iOS `requestPermission()` support and HTTP LAN fallback guidance) to agitate and throw the dice.
+
+---
+
 ## [1.0.0] — 2026-11-23
 
 ### Added
