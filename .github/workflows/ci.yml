@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Build React + TypeScript Frontend
+        run: |
+          cd frontend
+          npm install --no-audit --no-fund
+          npm run build
+          cd ..
+          rm -rf pkg/embed/frontend_dist/*
+          cp -R frontend/dist/. pkg/embed/frontend_dist/
+
+      - name: Run Go Vet & Unit / Monte Carlo / WebSocket Tests
+        run: |
+          go vet ./...
+          go test -v -race ./...
+
+      - name: Cross-Compile Windows & macOS Release Binaries
+        run: |
+          chmod +x Scripts/build_binaries.sh Scripts/package_release.sh
+          ./Scripts/package_release.sh

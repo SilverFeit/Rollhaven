@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 320" width="100%">
+  <defs>
+    <linearGradient id="archBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#090712"/>
+      <stop offset="100%" stop-color="#150e2b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1100" height="320" rx="16" fill="url(#archBg)" stroke="#4c1d95" stroke-width="2"/>
+
+  <!-- Left: Mobile / LAN Clients -->
+  <rect x="36" y="42" width="270" height="236" rx="12" fill="#120d22" stroke="#7c3aed" stroke-width="2"/>
+  <text x="171" y="74" text-anchor="middle" fill="#fde68a" font-family="sans-serif" font-weight="bold" font-size="15">Dispositivos LAN (Jugadores)</text>
+  <text x="171" y="102" text-anchor="middle" fill="#cbd5e1" font-family="monospace" font-size="12">iOS Safari / Android Chrome</text>
+  <text x="171" y="132" text-anchor="middle" fill="#a78bfa" font-family="sans-serif" font-size="12.5">• Onboarding: Nombre + Iniciativa</text>
+  <text x="171" y="156" text-anchor="middle" fill="#a78bfa" font-family="sans-serif" font-size="12.5">• 5 Sets de Decisión en vivo</text>
+  <text x="171" y="180" text-anchor="middle" fill="#a78bfa" font-family="sans-serif" font-size="12.5">• Raza SVG, Hoja PDF/IMG, Notas</text>
+  <text x="171" y="204" text-anchor="middle" fill="#a78bfa" font-family="sans-serif" font-size="12.5">• Inventario &amp; Mapa Canvas 50×50</text>
+  <text x="171" y="246" text-anchor="middle" fill="#6ee7b7" font-family="monospace" font-size="11.5">http://&lt;IP-LAN&gt;:8080</text>
+
+  <!-- Arrow 1 -->
+  <path d="M314 160 L388 160 M374 148 L390 160 L374 172" fill="none" stroke="#f59e0b" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="352" y="138" text-anchor="middle" fill="#fde68a" font-family="monospace" font-size="11">WS / REST</text>
+
+  <!-- Center: Single Binary Host -->
+  <rect x="398" y="32" width="320" height="256" rx="14" fill="#1b1136" stroke="#f59e0b" stroke-width="2"/>
+  <text x="558" y="64" text-anchor="middle" fill="#fde68a" font-family="sans-serif" font-weight="bold" font-size="16">Ejecutable Único Dicebound</text>
+  <text x="558" y="86" text-anchor="middle" fill="#c4b5fd" font-family="monospace" font-size="11.5">Windows (.exe) · macOS (arm64 / amd64)</text>
+  <rect x="422" y="104" width="272" height="38" rx="8" fill="#090712" stroke="#7c3aed"/>
+  <text x="558" y="128" text-anchor="middle" fill="#e2e8f0" font-family="monospace" font-size="12">go:embed React SPA + Router Chi</text>
+  <rect x="422" y="152" width="272" height="38" rx="8" fill="#090712" stroke="#7c3aed"/>
+  <text x="558" y="176" text-anchor="middle" fill="#e2e8f0" font-family="monospace" font-size="12">WebSocket Hub + Turn State Machine</text>
+  <rect x="422" y="200" width="272" height="38" rx="8" fill="#090712" stroke="#7c3aed"/>
+  <text x="558" y="224" text-anchor="middle" fill="#6ee7b7" font-family="monospace" font-size="12">crypto/rand RNG (Zero math/rand)</text>
+  <text x="558" y="268" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">Auto-browser launch → /dm</text>
+
+  <!-- Arrow 2 -->
+  <path d="M726 160 L800 160 M786 148 L802 160 L786 172" fill="none" stroke="#a78bfa" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="764" y="138" text-anchor="middle" fill="#c4b5fd" font-family="monospace" font-size="11">CGO-Free</text>
+
+  <!-- Right: Persistence & DM -->
+  <rect x="810" y="42" width="254" height="236" rx="12" fill="#120d22" stroke="#10b981" stroke-width="2"/>
+  <text x="937" y="74" text-anchor="middle" fill="#6ee7b7" font-family="sans-serif" font-weight="bold" font-size="15">Host DM &amp; Persistencia</text>
+  <text x="937" y="106" text-anchor="middle" fill="#e2e8f0" font-family="monospace" font-size="12">modernc.org/sqlite (WAL)</text>
+  <text x="937" y="134" text-anchor="middle" fill="#cbd5e1" font-family="sans-serif" font-size="12">• data/dnd_companion.db</text>
+  <text x="937" y="158" text-anchor="middle" fill="#cbd5e1" font-family="sans-serif" font-size="12">• data/uploads/maps/</text>
+  <text x="937" y="182" text-anchor="middle" fill="#cbd5e1" font-family="sans-serif" font-size="12">• data/uploads/sheets/</text>
+  <text x="937" y="218" text-anchor="middle" fill="#fde68a" font-family="sans-serif" font-size="12.5">DM Dashboard (/dm)</text>
+  <text x="937" y="242" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">Localhost o PIN 4 dígitos</text>
+</svg>

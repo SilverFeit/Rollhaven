@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="56%" r="55%">
+      <stop offset="0%" stop-color="#4c1d95" stop-opacity="0.7"/>
+      <stop offset="55%" stop-color="#140f24"/>
+      <stop offset="100%" stop-color="#090711"/>
+    </radialGradient>
+    <radialGradient id="d20Glow" cx="50%" cy="48%" r="55%">
+      <stop offset="0%" stop-color="#fffbeb"/>
+      <stop offset="65%" stop-color="#fde68a"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </radialGradient>
+    <linearGradient id="robeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4c1d95"/>
+      <stop offset="100%" stop-color="#1e1238"/>
+    </linearGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Rounded Square Base -->
+  <rect x="6" y="6" width="244" height="244" rx="52" fill="url(#bgGlow)" stroke="#5b21b6" stroke-width="3"/>
+  <!-- Subtle Hex Grid -->
+  <g stroke="#2e1d52" stroke-width="1" fill="none" opacity="0.4">
+    <polygon points="64,34 86,47 86,73 64,86 42,73 42,47"/>
+    <polygon points="192,34 214,47 214,73 192,86 170,73 170,47"/>
+    <polygon points="42,140 64,153 64,179 42,192 20,179 20,153"/>
+    <polygon points="214,140 236,153 236,179 214,192 192,179 192,153"/>
+  </g>
+  <!-- Hooded Figure Silhouette -->
+  <path d="M58 216 C56 168 72 132 95 118 C88 86 102 42 128 38 C154 42 168 86 161 118 C184 132 200 168 198 216 Z" fill="url(#robeGrad)" stroke="#6d28d9" stroke-width="2.5"/>
+  <!-- Dark Hood Void -->
+  <path d="M104 94 C104 68 115 54 128 54 C141 54 152 68 152 94 C152 114 140 124 128 124 C116 124 104 114 104 94 Z" fill="#07050e" stroke="#4c1d95" stroke-width="2"/>
+  <!-- Glowing D20 Icosahedron -->
+  <g filter="url(#softGlow)">
+    <polygon points="128,112 184,144 184,202 128,234 72,202 72,144" fill="url(#d20Glow)" stroke="#2e1065" stroke-width="4" stroke-linejoin="round"/>
+    <polygon points="128,144 162,198 94,198" fill="none" stroke="#2e1065" stroke-width="3.5" stroke-linejoin="round"/>
+    <line x1="128" y1="112" x2="128" y2="144" stroke="#2e1065" stroke-width="3.5"/>
+    <line x1="128" y1="144" x2="72" y2="144" stroke="#2e1065" stroke-width="3.5"/>
+    <line x1="128" y1="144" x2="184" y2="144" stroke="#2e1065" stroke-width="3.5"/>
+    <line x1="94" y1="198" x2="72" y2="144" stroke="#2e1065" stroke-width="3.5"/>
+    <line x1="94" y1="198" x2="72" y2="202" stroke="#2e1065" stroke-width="3.5"/>
+    <line x1="94" y1="198" x2="128" y2="234" stroke="#2e1065" stroke-width="3.5"/>
+    <line x1="162" y1="198" x2="184" y2="144" stroke="#2e1065" stroke-width="3.5"/>
+    <line x1="162" y1="198" x2="184" y2="202" stroke="#2e1065" stroke-width="3.5"/>
+    <line x1="162" y1="198" x2="128" y2="234" stroke="#2e1065" stroke-width="3.5"/>
+  </g>
+  <!-- Stylized Hands Holding D20 -->
+  <path d="M74 176 C62 182 58 202 74 214 C84 220 98 220 102 214" fill="#2b1745" stroke="#fde68a" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M182 176 C194 182 198 202 182 214 C172 220 158 220 154 214" fill="#2b1745" stroke="#fde68a" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

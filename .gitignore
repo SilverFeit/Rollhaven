@@ -1,0 +1,21 @@
+# Build & release outputs
+/dist/
+frontend/node_modules/
+frontend/dist/
+*.exe
+*.app
+*.dmg
+*.zip
+*.test
+*.out
+
+# Local SQLite databases & uploaded runtime user assets
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# OS metadata
+.DS_Store
+Thumbs.db

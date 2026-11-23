@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 380" width="100%">
+  <defs>
+    <linearGradient id="bgHero" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#090712"/>
+      <stop offset="55%" stop-color="#130d27"/>
+      <stop offset="100%" stop-color="#221445"/>
+    </linearGradient>
+    <radialGradient id="d20Hero" cx="50%" cy="48%" r="55%">
+      <stop offset="0%" stop-color="#fffbeb"/>
+      <stop offset="65%" stop-color="#fde68a"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="380" rx="20" fill="url(#bgHero)" stroke="#4c1d95" stroke-width="2"/>
+
+  <!-- Left Info -->
+  <rect x="48" y="36" width="490" height="30" rx="15" fill="#2e1065" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="293" y="56" text-anchor="middle" fill="#fde68a" font-family="sans-serif" font-weight="bold" font-size="12">SINGLE BINARY LAN SUITE • GO + REACT + SQLITE • WINDOWS &amp; MACOS</text>
+
+  <text x="48" y="114" fill="#f8fafc" font-family="sans-serif" font-weight="800" font-size="46">Dicebound</text>
+  <text x="48" y="152" fill="#c4b5fd" font-family="sans-serif" font-weight="600" font-size="19">D&amp;D LAN Companion: 5 Sets de Decisión, Turnos, Notas, Hojas &amp; Mapa Táctico</text>
+
+  <text x="48" y="196" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• Dados d2–d100, Moneda real (1/6000 canto), Magic 8 Ball, Peonza (4–12) &amp; Ruleta</text>
+  <text x="48" y="224" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• DM Dashboard (/dm) con QR LAN, latencia en vivo, override de iniciativa y log</text>
+  <text x="48" y="252" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• Mapa HTML5 Canvas 5×5 a 50×50 opcional, razas SVG, hoja PDF/IMG e inventario</text>
+  <text x="48" y="280" fill="#cbd5e1" font-family="sans-serif" font-size="14.5">• Ejecutable único CGO-free (modernc.org/sqlite + go:embed) sin instalar nada</text>
+
+  <rect x="48" y="308" width="540" height="42" rx="10" fill="#090712" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="68" y="334" fill="#fde68a" font-family="monospace" font-size="14">&gt; dicebound -port 8080   |   http://192.168.x.x:8080   |   /dm</text>
+
+  <!-- Right Preview Card -->
+  <rect x="642" y="34" width="514" height="312" rx="14" fill="#0c0818" stroke="#5b21b6" stroke-width="2"/>
+  <circle cx="668" cy="56" r="6" fill="#ef4444"/>
+  <circle cx="688" cy="56" r="6" fill="#f59e0b"/>
+  <circle cx="708" cy="56" r="6" fill="#10b981"/>
+  <text x="900" y="60" text-anchor="middle" fill="#a78bfa" font-family="monospace" font-size="12">WebSocket Hub (/ws) · crypto/rand RNG · Turn Engine</text>
+  <line x1="642" y1="74" x2="1156" y2="74" stroke="#2e1d52" stroke-width="1.5"/>
+
+  <text x="664" y="102" fill="#fde68a" font-family="monospace" font-weight="bold" font-size="13">[TURNO ACTIVO: THORIN (INIC. 20) — MÚLTIPLES LANZAMIENTOS]</text>
+  <text x="664" y="128" fill="#6ee7b7" font-family="monospace" font-size="12">• 1d20+3 =&gt; [20]+3 = 23  (¡CRÍTICO NAT 20!)</text>
+  <text x="664" y="150" fill="#fbbf24" font-family="monospace" font-size="12">• Moneda =&gt; ¡LA MONEDA QUEDÓ PARADA EN EL CANTO! (1/6000)</text>
+  <text x="664" y="172" fill="#e2e8f0" font-family="monospace" font-size="12">• Magic 8 Ball =&gt; "Todo apunta a que sí"</text>
+  <text x="664" y="194" fill="#e2e8f0" font-family="monospace" font-size="12">• Peonza (6 caras) =&gt; "Todos ponen"  |  Ruleta =&gt; "Atacar"</text>
+
+  <line x1="664" y1="214" x2="1134" y2="214" stroke="#1e1538" stroke-width="1.5"/>
+  <text x="664" y="238" fill="#c4b5fd" font-family="monospace" font-weight="bold" font-size="13">[MAPA TÁCTICO 50×50 CANVAS &amp; PERSONAJES]</text>
+  <text x="664" y="264" fill="#cbd5e1" font-family="monospace" font-size="12">• Thorin (Enano)  | Token (14, 22) | Hoja: PDF | Notas: 500ms</text>
+  <text x="664" y="286" fill="#cbd5e1" font-family="monospace" font-size="12">• Elara  (Elfa)   | Token (12, 19) | Inventario: 4 ítems</text>
+  <text x="664" y="318" fill="#34d399" font-family="monospace" font-size="12">[✓] LAN QR Activo   |   8+ Dispositivos Sincronizados (&lt;50ms)</text>
+</svg>
