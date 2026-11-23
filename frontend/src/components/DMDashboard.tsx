@@ -140,7 +140,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
 
   if (authorized === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#090712] text-slate-300 text-sm">
+      <div className="flex-1 flex items-center justify-center bg-[#090712] text-slate-300 text-sm">
         Verificando acceso del Dungeon Master...
       </div>
     )
@@ -148,7 +148,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
 
   if (!authorized) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-[radial-gradient(ellipse_at_top,_rgba(109,40,217,0.22),_#090712_65%)]">
+      <div className="flex-1 flex items-center justify-center p-4 bg-[radial-gradient(ellipse_at_top,_rgba(109,40,217,0.22),_#090712_65%)]">
         <div className="w-full max-w-sm rounded-2xl border border-violet-500/30 bg-[#120d22]/90 p-6 space-y-4 shadow-2xl">
           <div className="flex flex-col items-center text-center">
             <div className="w-14 h-14 rounded-2xl bg-violet-900/50 border border-amber-400/40 flex items-center justify-center mb-3">
@@ -233,7 +233,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   }
 
   return (
-    <div className="min-h-screen bg-[#090712] text-slate-100 pb-10">
+    <div className="flex-1 bg-[#090712] text-slate-100 pb-10">
       {/* Top DM Header */}
       <header className="sticky top-0 z-30 border-b border-violet-500/25 bg-[#0e091b]/95 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">

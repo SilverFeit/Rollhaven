@@ -29,7 +29,7 @@ export const PlayerOnboarding: React.FC<PlayerOnboardingProps> = ({ onJoin, conn
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-[radial-gradient(ellipse_at_top,_rgba(109,40,217,0.22),_#090712_65%)]">
+    <div className="flex-1 flex items-center justify-center p-4 bg-[radial-gradient(ellipse_at_top,_rgba(109,40,217,0.22),_#090712_65%)]">
       <div className="w-full max-w-md rounded-2xl border border-violet-500/30 bg-[#120d22]/90 backdrop-blur-xl shadow-2xl shadow-violet-950/50 p-6 sm:p-8">
         <div className="flex flex-col items-center text-center mb-6">
           <img

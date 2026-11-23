@@ -2,6 +2,14 @@
 
 All notable changes to **Dicebound** are documented in this file.
 
+## [1.1.1] — 2026-11-23
+
+### Added
+- **Global Footer with License & Version:** Added a bottom footer (`AppFooter`) across Onboarding, Player Workspace, and DM Dashboard showing the current app version (`v1.1.1`, synced from `/api/v1/health`) and `Licencia MIT (Copyright © 2026 SilverFeit)`.
+- **Health Endpoint Metadata:** `/api/v1/health` now returns `version` and `license` fields.
+
+---
+
 ## [1.1.0] — 2026-11-23
 
 ### Added

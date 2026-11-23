@@ -20,7 +20,7 @@ import (
 	"github.com/SilverFeit/Dicebound/pkg/store"
 )
 
-var version = "1.0.0"
+var version = "1.1.1"
 
 func main() {
 	port := flag.Int("port", 8080, "Puerto HTTP/WebSocket local del servidor")
@@ -59,6 +59,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error inicializando servidor: %v", err)
 	}
+	srv.Version = version
 
 	addr := fmt.Sprintf("0.0.0.0:%d", *port)
 	httpSrv := &http.Server{

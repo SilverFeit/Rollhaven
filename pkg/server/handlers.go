@@ -29,6 +29,7 @@ type Server struct {
 	LanIP     string
 	Port      int
 	DMPIN     string
+	Version   string
 }
 
 // GenerateSessionPIN creates a random 4-digit numeric PIN using crypto/rand.
@@ -68,6 +69,7 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 		LanIP:     lanIP,
 		Port:      port,
 		DMPIN:     dmPIN,
+		Version:   "1.1.1",
 	}
 	s.mountRoutes()
 	return s, nil
@@ -156,11 +158,17 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	ver := s.Version
+	if ver == "" {
+		ver = "1.1.1"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"app":    "Dicebound",
-		"lan_ip": s.LanIP,
-		"port":   s.Port,
+		"status":  "ok",
+		"app":     "Dicebound",
+		"version": ver,
+		"license": "MIT",
+		"lan_ip":  s.LanIP,
+		"port":    s.Port,
 	})
 }
 

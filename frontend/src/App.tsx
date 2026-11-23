@@ -8,6 +8,7 @@ import { CharacterSheetAndRaceTab, InventoryTab, NotesTab } from './components/P
 import { TacticalMapCanvas } from './components/TacticalMapCanvas'
 import { DMDashboard } from './components/DMDashboard'
 import { RaceSVG } from './components/RaceIcons'
+import { AppFooter } from './components/AppFooter'
 
 type PlayerTab = 'DECISIONS' | 'MAP' | 'SHEET' | 'INVENTORY' | 'NOTES'
 
@@ -46,14 +47,14 @@ const PlayerWorkspace: React.FC = () => {
 
   if (!snapshot || !currentPlayer) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#090712] text-slate-300 text-sm">
+      <div className="flex-1 flex items-center justify-center bg-[#090712] text-slate-300 text-sm">
         Sincronizando sesión de mesa...
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-[#090712] text-slate-100 pb-8">
+    <div className="flex-1 bg-[#090712] text-slate-100 pb-8">
       {/* Compact Mobile-First Header */}
       <header className="sticky top-0 z-20 border-b border-violet-500/25 bg-[#0e091b]/95 backdrop-blur-md">
         <div className="max-w-4xl mx-auto px-3.5 py-2.5 flex items-center justify-between gap-2">
@@ -201,6 +202,8 @@ const PlayerWorkspace: React.FC = () => {
 
 export function App() {
   const [route, setRoute] = useState<string>(() => window.location.pathname)
+  const [appVersion, setAppVersion] = useState<string>('1.1.1')
+  const [appLicense, setAppLicense] = useState<string>('MIT')
 
   useEffect(() => {
     const onPop = () => setRoute(window.location.pathname)
@@ -208,16 +211,31 @@ export function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
+  useEffect(() => {
+    fetch('/api/v1/health')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.version) setAppVersion(String(d.version))
+        if (d.license) setAppLicense(String(d.license))
+      })
+      .catch(() => {})
+  }, [])
+
   const navigate = (path: string) => {
     window.history.pushState({}, '', path)
     setRoute(path)
   }
 
-  if (route.startsWith('/dm')) {
-    return <DMDashboard onGoPlayerView={() => navigate('/')} />
-  }
-
-  return <PlayerWorkspace />
+  return (
+    <div className="min-h-screen flex flex-col bg-[#090712]">
+      {route.startsWith('/dm') ? (
+        <DMDashboard onGoPlayerView={() => navigate('/')} />
+      ) : (
+        <PlayerWorkspace />
+      )}
+      <AppFooter version={appVersion} license={appLicense} />
+    </div>
+  )
 }
 
 export default App

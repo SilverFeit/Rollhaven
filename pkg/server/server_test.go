@@ -73,7 +73,7 @@ func TestHealthAndDMAuth(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		t.Fatal(err)
 	}
-	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Dicebound" {
+	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Dicebound" || health["version"] != "1.1.1" || health["license"] != "MIT" {
 		t.Fatalf("unexpected health response: %+v", health)
 	}
 
