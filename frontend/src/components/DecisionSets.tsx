@@ -3,6 +3,7 @@ import { Coins, Dices, Disc3, HelpCircle, Plus, RotateCw, Sparkles, Trash2 } fro
 import { CoinDetail, DiceDetail, Magic8Detail, RollBroadcast, WheelDetail } from '../types'
 import { DicePhysicsArena } from './DicePhysicsArena'
 import { PeonzaArenaCanvas } from './PeonzaArenaCanvas'
+import { unlockHaptics } from '../lib/haptics'
 
 interface DecisionSetsProps {
   onRoll: (payload: Record<string, unknown>) => void
@@ -126,6 +127,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
 
   const handleDieBtnDown = (sides: number, e: React.PointerEvent<HTMLButtonElement>) => {
     if (disabled) return
+    unlockHaptics()
     e.currentTarget.setPointerCapture(e.pointerId)
     setSelectedSides(sides)
     activeHoldSidesRef.current = sides

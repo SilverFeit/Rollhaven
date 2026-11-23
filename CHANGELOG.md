@@ -2,6 +2,19 @@
 
 All notable changes to **Dicebound** are documented in this file.
 
+## [1.1.2] — 2026-11-23
+
+### Fixed & Added
+- **Dual HTTP + HTTPS (`wss://`) Multiplexer on Port 8080 (`pkg/server/tls.go`):**
+  - Automatically generates a local Root CA and TLS certificate for `localhost` and the active LAN IP (`192.168.x.x`), multiplexing both `http://` and `https://` (`wss://`) on the same port `8080` so mobile browsers run in a Secure Context (`window.isSecureContext === true`) required by `DeviceMotionEvent` on iOS Safari, iOS Chrome, and Android Chrome.
+  - DM Dashboard QR defaults to `https://<LAN_IP>:<PORT>` with a quick `HTTPS / HTTP` toggle.
+- **Mobile Accelerometer & iOS Shake-to-Undo Fix (`DicePhysicsArena.tsx`):**
+  - Fixes `null` `ev.acceleration` properties by subtracting consecutive `ev.accelerationIncludingGravity` deltas, monitoring `rotationRate` & `deviceorientation`, blurring active inputs before shake to prevent iOS "Shake to Undo" dialogs, and offering a 1-tap **Cambiar a HTTPS** redirect if opened over plain HTTP.
+- **Cross-Platform Haptic Feedback (`frontend/src/lib/haptics.ts`):**
+  - Triggers tactile feedback on every die-to-wall bounce, die-to-die collision, Peonza wall bounce, and final landing using `navigator.vibrate`, iOS Safari 17.4+ `<input type="checkbox" switch />`, and a low-frequency WebAudio tactile thud.
+
+---
+
 ## [1.1.1] — 2026-11-23
 
 ### Added

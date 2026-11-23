@@ -202,7 +202,7 @@ const PlayerWorkspace: React.FC = () => {
 
 export function App() {
   const [route, setRoute] = useState<string>(() => window.location.pathname)
-  const [appVersion, setAppVersion] = useState<string>('1.1.1')
+  const [appVersion, setAppVersion] = useState<string>('1.1.2')
   const [appLicense, setAppLicense] = useState<string>('MIT')
 
   useEffect(() => {

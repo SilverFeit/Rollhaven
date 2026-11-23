@@ -3,9 +3,11 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -73,7 +75,7 @@ func TestHealthAndDMAuth(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		t.Fatal(err)
 	}
-	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Dicebound" || health["version"] != "1.1.1" || health["license"] != "MIT" {
+	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Dicebound" || health["version"] != "1.1.2" || health["license"] != "MIT" {
 		t.Fatalf("unexpected health response: %+v", health)
 	}
 
@@ -303,4 +305,70 @@ func TestUploadsAndPersistenceREST(t *testing.T) {
 	if getResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 serving uploaded file, got %d", getResp.StatusCode)
 	}
+}
+
+func TestDualProtocolHTTPAndHTTPS(t *testing.T) {
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open memory sqlite: %v", err)
+	}
+	defer db.Close()
+
+	st, err := store.New(db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	srv, err := server.New(st, t.TempDir(), "127.0.0.1", 0, "1234")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Hub.Close()
+
+	rawLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dualLn := server.NewDualProtocolListener(rawLn, srv.TLSConfig)
+	httpSrv := &http.Server{Handler: srv.Router}
+	go func() { _ = httpSrv.Serve(dualLn) }()
+	defer httpSrv.Close()
+
+	addr := rawLn.Addr().String()
+
+	// 1. Plain HTTP check
+	rHTTP, err := http.Get("http://" + addr + "/api/v1/health")
+	if err != nil {
+		t.Fatalf("HTTP GET failed: %v", err)
+	}
+	rHTTP.Body.Close()
+	if rHTTP.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on HTTP, got %d", rHTTP.StatusCode)
+	}
+
+	// 2. HTTPS check on the SAME port
+	httpsClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	rHTTPS, err := httpsClient.Get("https://" + addr + "/api/v1/tls/ca.crt")
+	if err != nil {
+		t.Fatalf("HTTPS GET failed: %v", err)
+	}
+	rHTTPS.Body.Close()
+	if rHTTPS.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on HTTPS CA cert, got %d", rHTTPS.StatusCode)
+	}
+
+	// 3. WSS WebSocket upgrade over TLS on the SAME port
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wsConn, _, err := websocket.Dial(ctx, "wss://"+addr+"/ws", &websocket.DialOptions{
+		HTTPClient: httpsClient,
+	})
+	if err != nil {
+		t.Fatalf("WSS dial failed: %v", err)
+	}
+	_ = readUntilEvent(t, ctx, wsConn, "STATE_SYNC")
+	_ = wsConn.Close(websocket.StatusNormalClosure, "ok")
 }

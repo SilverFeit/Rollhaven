@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { RotateCw, Sparkles } from 'lucide-react'
 import { RollBroadcast, SpinnerDetail } from '../types'
+import { triggerBounceHaptic, unlockHaptics } from '../lib/haptics'
 
 interface PeonzaArenaCanvasProps {
   faces: string[]
@@ -247,6 +248,7 @@ export const PeonzaArenaCanvas: React.FC<PeonzaArenaCanvasProps> = ({
             st.omega *= 0.80
             st.bounces += 1
             setBouncesUI(st.bounces)
+            triggerBounceHaptic('medium')
           }
 
           const currentSpeed = Math.hypot(st.vx, st.vy)
@@ -295,6 +297,7 @@ export const PeonzaArenaCanvas: React.FC<PeonzaArenaCanvasProps> = ({
             setSpeedUI(0)
             setPhaseLabel('landed')
             setLandedLabel(st.winningLabel)
+            triggerBounceHaptic('heavy')
           }
         }
 
@@ -436,6 +439,7 @@ export const PeonzaArenaCanvas: React.FC<PeonzaArenaCanvasProps> = ({
 
   const startCharge = () => {
     if (disabled) return
+    unlockHaptics()
     const st = stateRef.current
     if (st.phase === 'spinning' || st.phase === 'settling') return
     st.phase = 'charging'
@@ -485,7 +489,10 @@ export const PeonzaArenaCanvas: React.FC<PeonzaArenaCanvasProps> = ({
       <button
         type="button"
         disabled={disabled || phaseLabel === 'spinning' || phaseLabel === 'settling' || faces.length < 4}
-        onClick={onSpin}
+        onClick={() => {
+          unlockHaptics()
+          onSpin()
+        }}
         className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-amber-500 hover:from-violet-500 hover:to-amber-400 text-white font-bold text-sm shadow-lg transition disabled:opacity-45 flex items-center gap-2"
       >
         <RotateCw className={`w-4 h-4 ${phaseLabel === 'spinning' ? 'animate-spin' : ''}`} />

@@ -49,6 +49,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   const [verifiedPIN, setVerifiedPIN] = useState('')
   const [authError, setAuthError] = useState<string | null>(null)
   const [copiedURL, setCopiedURL] = useState(false)
+  const [qrHTTPS, setQrHTTPS] = useState(true)
 
   // DM private notepad
   const [dmNotes, setDmNotes] = useState('')
@@ -193,7 +194,8 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
     )
   }
 
-  const lanURL = snapshot ? `http://${snapshot.lan_ip}:${snapshot.port}` : window.location.origin
+  const lanScheme = qrHTTPS ? 'https' : 'http'
+  const lanURL = snapshot ? `${lanScheme}://${snapshot.lan_ip}:${snapshot.port}` : window.location.origin
   const players = snapshot?.players ?? []
   const connectedCount = players.filter((p) => p.is_connected).length
 
@@ -292,9 +294,22 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
           {/* QR & LAN Connection Card */}
           <section className="lg:col-span-4 rounded-2xl border border-violet-500/25 bg-[#120d22]/85 p-4 sm:p-5 flex flex-col justify-between space-y-4">
             <div>
-              <h2 className="text-sm font-bold text-amber-200 mb-1">Conexión de Jugadores en Red Local</h2>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <h2 className="text-sm font-bold text-amber-200">Conexión de Jugadores en Red Local</h2>
+                <button
+                  type="button"
+                  onClick={() => setQrHTTPS((prev) => !prev)}
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold border transition ${
+                    qrHTTPS
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : 'bg-slate-800 text-slate-300 border-slate-600'
+                  }`}
+                >
+                  {qrHTTPS ? 'HTTPS (Sensores)' : 'HTTP'}
+                </button>
+              </div>
               <p className="text-xs text-slate-400">
-                Los jugadores solo escanean este código QR o abren la URL en el navegador de su móvil/PC.
+                Los jugadores escanean este QR. En HTTPS funcionan el acelerómetro y hápticos en iOS/Android (si aparece aviso de certificado local, pulsar Avanzado → Continuar).
               </p>
             </div>
 

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -20,7 +21,7 @@ import (
 	"github.com/SilverFeit/Dicebound/pkg/store"
 )
 
-var version = "1.1.1"
+var version = "1.1.2"
 
 func main() {
 	port := flag.Int("port", 8080, "Puerto HTTP/WebSocket local del servidor")
@@ -62,6 +63,12 @@ func main() {
 	srv.Version = version
 
 	addr := fmt.Sprintf("0.0.0.0:%d", *port)
+	rawLn, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Error abriendo puerto %s: %v", addr, err)
+	}
+	dualLn := server.NewDualProtocolListener(rawLn, srv.TLSConfig)
+
 	httpSrv := &http.Server{
 		Addr:              addr,
 		Handler:           srv.Router,
@@ -69,9 +76,10 @@ func main() {
 	}
 
 	lanURL := fmt.Sprintf("http://%s:%d", lanIP, *port)
+	httpsURL := fmt.Sprintf("https://%s:%d", lanIP, *port)
 	dmURL := fmt.Sprintf("http://localhost:%d/dm", *port)
 
-	printBanner(lanURL, dmURL, srv.DMPIN, resolvedDataDir)
+	printBanner(lanURL, httpsURL, dmURL, srv.DMPIN, resolvedDataDir)
 
 	go func() {
 		if !*dev && !*noBrowser {
@@ -82,7 +90,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.Serve(dualLn); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()
@@ -135,14 +143,15 @@ func isDirWritable(dir string) bool {
 	return true
 }
 
-func printBanner(lanURL, dmURL, pin, dataDir string) {
+func printBanner(lanURL, httpsURL, dmURL, pin, dataDir string) {
 	fmt.Println("================================================================")
 	fmt.Printf("  DICEBOUND v%s — D&D Companion LAN Suite\n", version)
 	fmt.Println("================================================================")
-	fmt.Printf("  [DM Dashboard Local] : %s\n", dmURL)
-	fmt.Printf("  [URL Jugadores LAN]  : %s\n", lanURL)
-	fmt.Printf("  [PIN DM (Remoto)]    : %s\n", pin)
-	fmt.Printf("  [Base de Datos]      : %s\n", filepath.Join(dataDir, "dnd_companion.db"))
+	fmt.Printf("  [DM Dashboard Local]  : %s\n", dmURL)
+	fmt.Printf("  [URL Jugadores HTTP]  : %s\n", lanURL)
+	fmt.Printf("  [URL Jugadores HTTPS] : %s  (Sensores / Agitar Móvil)\n", httpsURL)
+	fmt.Printf("  [PIN DM (Remoto)]     : %s\n", pin)
+	fmt.Printf("  [Base de Datos]       : %s\n", filepath.Join(dataDir, "dnd_companion.db"))
 	fmt.Println("----------------------------------------------------------------")
 	fmt.Println("  Presiona Ctrl+C para detener el servidor.")
 	fmt.Println("================================================================")

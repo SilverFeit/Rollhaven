@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +31,8 @@ type Server struct {
 	Port      int
 	DMPIN     string
 	Version   string
+	TLSConfig *tls.Config
+	CACertPEM []byte
 }
 
 // GenerateSessionPIN creates a random 4-digit numeric PIN using crypto/rand.
@@ -59,6 +62,11 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 		dmPIN = pin
 	}
 
+	tlsAssets, err := EnsureTLSAssets(dataDir, lanIP)
+	if err != nil {
+		return nil, fmt.Errorf("init tls assets: %w", err)
+	}
+
 	hub := NewHub(st, lanIP, port, dmPIN)
 	s := &Server{
 		Router:    chi.NewRouter(),
@@ -69,7 +77,9 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 		LanIP:     lanIP,
 		Port:      port,
 		DMPIN:     dmPIN,
-		Version:   "1.1.1",
+		Version:   "1.1.2",
+		TLSConfig: tlsAssets.Config,
+		CACertPEM: tlsAssets.CACertPEM,
 	}
 	s.mountRoutes()
 	return s, nil
@@ -103,6 +113,7 @@ func (s *Server) mountRoutes() {
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/health", s.handleHealth)
 		api.Get("/state", s.handlePublicState)
+		api.Get("/tls/ca.crt", s.handleDownloadCACert)
 
 		api.Get("/dm/status", s.handleDMStatus)
 		api.Post("/dm/auth", s.handleDMAuth)
@@ -160,7 +171,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ver := s.Version
 	if ver == "" {
-		ver = "1.1.1"
+		ver = "1.1.2"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -170,6 +181,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"lan_ip":  s.LanIP,
 		"port":    s.Port,
 	})
+}
+
+func (s *Server) handleDownloadCACert(w http.ResponseWriter, r *http.Request) {
+	if len(s.CACertPEM) == 0 {
+		http.Error(w, "CA certificate not available", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", `attachment; filename="dicebound-ca.crt"`)
+	_, _ = w.Write(s.CACertPEM)
 }
 
 func (s *Server) handlePublicState(w http.ResponseWriter, r *http.Request) {

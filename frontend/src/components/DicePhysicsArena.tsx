@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Hand, Smartphone, Sparkles } from 'lucide-react'
+import { Hand, ShieldCheck, Smartphone, Sparkles } from 'lucide-react'
 import { DiceDetail, RollBroadcast } from '../types'
+import { triggerBounceHaptic, unlockHaptics } from '../lib/haptics'
 
 interface DicePhysicsArenaProps {
   selectedSides: number
@@ -37,6 +38,17 @@ interface CollisionSpark {
 
 type ArenaPhase = 'idle' | 'shaking' | 'rolling' | 'settled'
 
+function blurFocusedInputs() {
+  try {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+    window.getSelection()?.removeAllRanges()
+  } catch {
+    // Ignore selection errors
+  }
+}
+
 export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
   selectedSides,
   diceCount,
@@ -50,7 +62,7 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
   const lastHandledID = useRef<number>(0)
 
   const [phaseUI, setPhaseUI] = useState<ArenaPhase>('idle')
-  const [sensorStatus, setSensorStatus] = useState<'off' | 'active' | 'denied' | 'unsupported'>('off')
+  const [sensorStatus, setSensorStatus] = useState<'off' | 'active' | 'needs_https' | 'denied' | 'unsupported'>('off')
   const [sensorNotice, setSensorNotice] = useState<string | null>(null)
   const [collisionCount, setCollisionCount] = useState(0)
 
@@ -59,6 +71,8 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
   const shakeStopTimerRef = useRef<number | null>(null)
   const isPhoneShakingRef = useRef(false)
   const preservedFromShakeRef = useRef(false)
+  const lastGravRef = useRef<{ x: number; y: number; z: number } | null>(null)
+  const lastOrientRef = useRef<{ beta: number; gamma: number } | null>(null)
 
   const physicsRef = useRef<{
     phase: ArenaPhase
@@ -126,6 +140,8 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
   // Sync external hold-to-shake (e.g. holding down a d20 button)
   useEffect(() => {
     if (externalHolding && !holdingRef.current) {
+      unlockHaptics()
+      blurFocusedInputs()
       holdingRef.current = true
       const st = physicsRef.current
       const size = containerRef.current?.clientWidth || 320
@@ -159,7 +175,6 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
     st.lastDetail = detail
     st.sides = detail.sides
 
-    // If dice count differs or not currently rolling/shaking, spawn matching dice
     if (st.dice.length !== detail.rolls.length) {
       st.dice = buildDiceBodies(detail.rolls.length, detail.sides, size)
     }
@@ -177,7 +192,6 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
     st.dice.forEach((d, idx) => {
       d.sides = detail.sides
       d.targetValue = detail.rolls[idx] ?? detail.rolls[0]
-      // If dice were still, give them a vigorous throw across the 1:1 tray
       if (Math.hypot(d.vx, d.vy) < 180) {
         const ang = Math.random() * Math.PI * 2
         const spd = 340 + Math.random() * 240
@@ -188,7 +202,7 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
     })
   }, [lastBroadcast, buildDiceBodies])
 
-  // 60 FPS Rigid-Body Collision & Rendering Loop
+  // 60 FPS Rigid-Body Collision, Haptic Feedback & Rendering Loop
   useEffect(() => {
     let rafId = 0
     let lastTime = performance.now()
@@ -201,7 +215,7 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
       const container = containerRef.current
       if (canvas && container) {
         const dpr = window.devicePixelRatio || 1
-        const size = container.clientWidth // Strict 1:1 square
+        const size = container.clientWidth
         if (size > 0 && (canvas.width !== Math.floor(size * dpr) || canvas.height !== Math.floor(size * dpr))) {
           canvas.width = Math.floor(size * dpr)
           canvas.height = Math.floor(size * dpr)
@@ -229,23 +243,19 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
           const subDt = dt / subSteps
 
           for (let s = 0; s < subSteps; s++) {
-            // 1. Forces & integration
             for (const d of st.dice) {
               if (isShaking) {
-                // Continuous agitation ("batir los dados"): swirl around pointer or tray center
                 const targetX = pointerPosRef.current ? pointerPosRef.current.x : size * 0.5
                 const targetY = pointerPosRef.current ? pointerPosRef.current.y : size * 0.5
                 const dx = targetX - d.x
                 const dy = targetY - d.y
                 const dist = Math.max(12, Math.hypot(dx, dy))
-                // Tangential swirl + random turbulence + inward pull
                 const tx = -dy / dist
                 const ty = dx / dist
                 d.vx += (tx * 950 + (dx / dist) * 520 + (Math.random() - 0.5) * 1800) * subDt
                 d.vy += (ty * 950 + (dy / dist) * 520 + (Math.random() - 0.5) * 1800) * subDt
                 d.omega += (Math.random() - 0.5) * 35 * subDt
 
-                // Cap max velocity so dice stay readable and clash energetically
                 const spd = Math.hypot(d.vx, d.vy)
                 if (spd > 680) {
                   d.vx = (d.vx / spd) * 680
@@ -253,7 +263,6 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
                 }
                 d.omega = Math.max(-18, Math.min(18, d.omega))
               } else if (isRolling) {
-                // Felt friction slows dice down cleanly
                 const friction = Math.pow(0.24, subDt)
                 d.vx *= friction
                 d.vy *= friction
@@ -264,7 +273,6 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
               d.y += d.vy * subDt
               d.angle += d.omega * subDt
 
-              // Cycle randomized face numbers while tumbling fast
               const spd = Math.hypot(d.vx, d.vy)
               d.flipTimer += subDt * (2 + spd * 0.03)
               if (d.flipTimer >= 0.35 && (isShaking || spd > 42 || st.rollElapsed < 0.85)) {
@@ -274,32 +282,47 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
                 d.displayValue = d.targetValue
               }
 
-              // 2. Wall collisions inside 1:1 tray
+              // Wall collisions inside 1:1 tray + haptic bounce feedback
               const pad = 8
               const min = d.radius + pad
               const max = Math.max(min + 2, size - d.radius - pad)
               const wallRestitution = isShaking ? 0.88 : 0.74
+              let hitWall = false
+              let impactSpd = 0
+
               if (d.x < min) {
+                impactSpd = Math.abs(d.vx)
                 d.x = min
                 d.vx = Math.abs(d.vx) * wallRestitution
                 d.omega += (Math.random() - 0.5) * 6
+                hitWall = true
               } else if (d.x > max) {
+                impactSpd = Math.abs(d.vx)
                 d.x = max
                 d.vx = -Math.abs(d.vx) * wallRestitution
                 d.omega += (Math.random() - 0.5) * 6
+                hitWall = true
               }
               if (d.y < min) {
+                impactSpd = Math.max(impactSpd, Math.abs(d.vy))
                 d.y = min
                 d.vy = Math.abs(d.vy) * wallRestitution
                 d.omega += (Math.random() - 0.5) * 6
+                hitWall = true
               } else if (d.y > max) {
+                impactSpd = Math.max(impactSpd, Math.abs(d.vy))
                 d.y = max
                 d.vy = -Math.abs(d.vy) * wallRestitution
                 d.omega += (Math.random() - 0.5) * 6
+                hitWall = true
+              }
+
+              if (hitWall && s === 0 && impactSpd > 65) {
+                triggerBounceHaptic('light')
               }
             }
 
-            // 3. Pairwise Elastic Die-to-Die Collisions
+            // Pairwise Elastic Die-to-Die Collisions + haptic pulse
             for (let i = 0; i < st.dice.length; i++) {
               for (let j = i + 1; j < st.dice.length; j++) {
                 const a = st.dice[i]
@@ -328,7 +351,6 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
                     b.vx += impulse * nx
                     b.vy += impulse * ny
 
-                    // Tangential spin exchange on impact
                     const tangentSpin = (rvx * -ny + rvy * nx) * 0.04
                     a.omega -= tangentSpin
                     b.omega += tangentSpin
@@ -336,6 +358,7 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
                     if (s === 0 && Math.abs(velAlongNormal) > 45) {
                       st.collisions += 1
                       setCollisionCount(st.collisions)
+                      triggerBounceHaptic('medium')
                       st.sparks.push({
                         x: (a.x + b.x) / 2,
                         y: (a.y + b.y) / 2,
@@ -351,7 +374,6 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
             }
           }
 
-          // Check if rolling dice have settled
           if (isRolling && st.rollElapsed > 1.05) {
             const maxSpeed = st.dice.reduce((acc, d) => Math.max(acc, Math.hypot(d.vx, d.vy)), 0)
             if (maxSpeed < 16 || st.rollElapsed > 2.4) {
@@ -365,36 +387,32 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
                 }
               }
               setPhaseUI('settled')
+              triggerBounceHaptic('heavy')
             }
           }
         }
 
-        // Update collision sparks
         st.sparks = st.sparks.filter((sp) => {
           sp.r += (sp.maxR - sp.r) * dt * 10
           sp.alpha -= dt * 3.2
           return sp.alpha > 0.02
         })
 
-        // ---------------- RENDER 1:1 DICE ARENA ----------------
         const ctx = canvas.getContext('2d')
         if (ctx && size > 0) {
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
           ctx.clearRect(0, 0, size, size)
 
-          // Felt tray gradient
           const grad = ctx.createRadialGradient(size / 2, size / 2, 16, size / 2, size / 2, size * 0.72)
           grad.addColorStop(0, isShaking ? '#241447' : '#181030')
           grad.addColorStop(1, '#090712')
           ctx.fillStyle = grad
           ctx.fillRect(0, 0, size, size)
 
-          // Subtle inner beveled frame
           ctx.strokeStyle = isShaking ? 'rgba(251, 191, 36, 0.75)' : 'rgba(139, 92, 246, 0.35)'
           ctx.lineWidth = isShaking ? 4 : 2
           ctx.strokeRect(6, 6, size - 12, size - 12)
 
-          // Faint octagonal rune circle in center of tray
           ctx.save()
           ctx.strokeStyle = 'rgba(167, 139, 250, 0.12)'
           ctx.lineWidth = 1.5
@@ -403,7 +421,6 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
           ctx.stroke()
           ctx.restore()
 
-          // Collision rings
           for (const sp of st.sparks) {
             ctx.save()
             ctx.strokeStyle = sp.color
@@ -415,7 +432,6 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
             ctx.restore()
           }
 
-          // Render every physical die
           for (const d of st.dice) {
             drawPolyhedralDie(ctx, d, st.phase === 'settled')
           }
@@ -431,6 +447,8 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
 
   const beginHoldShake = (clientX?: number, clientY?: number) => {
     if (disabled) return
+    unlockHaptics()
+    blurFocusedInputs()
     holdingRef.current = true
     if (clientX !== undefined && clientY !== undefined && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect()
@@ -465,102 +483,199 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
     }
   }
 
-  // Accelerometer Shake Gesture ("Agitar el celular")
-  const handleMotionEvent = useCallback(
-    (ev: DeviceMotionEvent) => {
-      const acc = ev.acceleration || ev.accelerationIncludingGravity
-      if (!acc) return
-      const ax = acc.x ?? 0
-      const ay = acc.y ?? 0
-      const az = acc.z ?? 0
-      const magnitude = Math.hypot(ax, ay, az)
-      const threshold = ev.acceleration ? 11.5 : 19.5
-      if (magnitude > threshold) {
-        const st = physicsRef.current
-        if (st.phase !== 'shaking') {
-          const size = containerRef.current?.clientWidth || 320
-          if (st.dice.length !== diceCount || st.sides !== selectedSides) {
-            st.dice = buildDiceBodies(diceCount, selectedSides, size)
-          }
-          st.phase = 'shaking'
-          st.collisions = 0
-          setCollisionCount(0)
-          setPhaseUI('shaking')
+  const applyShakeImpulse = useCallback(
+    (impulseX: number, impulseY: number) => {
+      blurFocusedInputs()
+      const st = physicsRef.current
+      if (st.phase !== 'shaking') {
+        const size = containerRef.current?.clientWidth || 320
+        if (st.dice.length !== diceCount || st.sides !== selectedSides) {
+          st.dice = buildDiceBodies(diceCount, selectedSides, size)
         }
-        isPhoneShakingRef.current = true
-        for (const d of st.dice) {
-          d.vx += ax * 36 + (Math.random() - 0.5) * 140
-          d.vy += -ay * 36 + (Math.random() - 0.5) * 140
-          d.omega += (Math.random() - 0.5) * 10
-        }
-
-        if (shakeStopTimerRef.current) {
-          window.clearTimeout(shakeStopTimerRef.current)
-        }
-        shakeStopTimerRef.current = window.setTimeout(() => {
-          if (isPhoneShakingRef.current) {
-            isPhoneShakingRef.current = false
-            if (!disabled) {
-              preservedFromShakeRef.current = true
-              physicsRef.current.phase = 'rolling'
-              physicsRef.current.rollElapsed = 0
-              setPhaseUI('rolling')
-              onRollCompleteRequest(selectedSides)
-            }
-          }
-        }, 450)
+        st.phase = 'shaking'
+        st.collisions = 0
+        setCollisionCount(0)
+        setPhaseUI('shaking')
       }
+      isPhoneShakingRef.current = true
+      triggerBounceHaptic('light')
+
+      for (const d of st.dice) {
+        d.vx += impulseX * 42 + (Math.random() - 0.5) * 180
+        d.vy += -impulseY * 42 + (Math.random() - 0.5) * 180
+        d.omega += (Math.random() - 0.5) * 12
+      }
+
+      if (shakeStopTimerRef.current) {
+        window.clearTimeout(shakeStopTimerRef.current)
+      }
+      shakeStopTimerRef.current = window.setTimeout(() => {
+        if (isPhoneShakingRef.current) {
+          isPhoneShakingRef.current = false
+          if (!disabled) {
+            preservedFromShakeRef.current = true
+            physicsRef.current.phase = 'rolling'
+            physicsRef.current.rollElapsed = 0
+            setPhaseUI('rolling')
+            onRollCompleteRequest(selectedSides)
+          }
+        }
+      }, 450)
     },
     [diceCount, selectedSides, buildDiceBodies, disabled, onRollCompleteRequest]
+  )
+
+  // Fixed Accelerometer Shake Detector (null-safe ev.acceleration + gravity frame-delta + rotationRate)
+  const handleMotionEvent = useCallback(
+    (ev: DeviceMotionEvent) => {
+      const hasLinear =
+        ev.acceleration &&
+        typeof ev.acceleration.x === 'number' &&
+        typeof ev.acceleration.y === 'number'
+
+      let deltaMag = 0
+      let ix = 0
+      let iy = 0
+
+      if (hasLinear) {
+        const ax = ev.acceleration!.x ?? 0
+        const ay = ev.acceleration!.y ?? 0
+        const az = ev.acceleration!.z ?? 0
+        deltaMag = Math.hypot(ax, ay, az)
+        ix = ax
+        iy = ay
+      } else if (
+        ev.accelerationIncludingGravity &&
+        typeof ev.accelerationIncludingGravity.x === 'number'
+      ) {
+        const gx = ev.accelerationIncludingGravity.x ?? 0
+        const gy = ev.accelerationIncludingGravity.y ?? 0
+        const gz = ev.accelerationIncludingGravity.z ?? 0
+        if (lastGravRef.current) {
+          const dx = gx - lastGravRef.current.x
+          const dy = gy - lastGravRef.current.y
+          const dz = gz - lastGravRef.current.z
+          deltaMag = Math.hypot(dx, dy, dz)
+          ix = dx
+          iy = dy
+        }
+        lastGravRef.current = { x: gx, y: gy, z: gz }
+      }
+
+      // Check angular velocity (rotationRate) as well for wrist flicks
+      const rot = ev.rotationRate
+      const rotMag =
+        rot && typeof rot.alpha === 'number'
+          ? Math.hypot(rot.alpha ?? 0, rot.beta ?? 0, rot.gamma ?? 0)
+          : 0
+
+      const threshold = hasLinear ? 6.8 : 7.5
+      if (deltaMag > threshold || rotMag > 230) {
+        applyShakeImpulse(ix || (Math.random() - 0.5) * 10, iy || (Math.random() - 0.5) * 10)
+      }
+    },
+    [applyShakeImpulse]
+  )
+
+  const handleOrientationEvent = useCallback(
+    (ev: DeviceOrientationEvent) => {
+      if (typeof ev.beta !== 'number' || typeof ev.gamma !== 'number') return
+      if (lastOrientRef.current) {
+        const dBeta = ev.beta - lastOrientRef.current.beta
+        const dGamma = ev.gamma - lastOrientRef.current.gamma
+        if (Math.hypot(dBeta, dGamma) > 28) {
+          applyShakeImpulse(dGamma * 0.4, dBeta * 0.4)
+        }
+      }
+      lastOrientRef.current = { beta: ev.beta, gamma: ev.gamma }
+    },
+    [applyShakeImpulse]
   )
 
   useEffect(() => {
     if (sensorStatus !== 'active') return
     window.addEventListener('devicemotion', handleMotionEvent)
+    window.addEventListener('deviceorientation', handleOrientationEvent)
     return () => {
       window.removeEventListener('devicemotion', handleMotionEvent)
+      window.removeEventListener('deviceorientation', handleOrientationEvent)
       if (shakeStopTimerRef.current) {
         window.clearTimeout(shakeStopTimerRef.current)
       }
     }
-  }, [sensorStatus, handleMotionEvent])
+  }, [sensorStatus, handleMotionEvent, handleOrientationEvent])
+
+  // Check secure context on mount
+  const isLANPlainHTTP =
+    typeof window !== 'undefined' &&
+    !window.isSecureContext &&
+    window.location.hostname !== 'localhost' &&
+    window.location.hostname !== '127.0.0.1'
 
   const enableAccelerometer = async () => {
+    unlockHaptics()
+    blurFocusedInputs()
     setSensorNotice(null)
+
     if (sensorStatus === 'active') {
       setSensorStatus('off')
       return
     }
-    if (typeof window === 'undefined' || !('DeviceMotionEvent' in window)) {
-      setSensorStatus('unsupported')
-      setSensorNotice('Este dispositivo no reporta acelerómetro. Usa "Mantén para Batir".')
+
+    // Modern iOS Safari, iOS Chrome, and Android Chrome strip DeviceMotionEvent unless in HTTPS Secure Context!
+    if (isLANPlainHTTP) {
+      setSensorStatus('needs_https')
+      setSensorNotice(
+        'Para habilitar el acelerómetro en iOS/Android es necesario abrir en HTTPS. Pulsa "Cambiar a HTTPS" abajo (acepta el certificado local en tu navegador).'
+      )
       return
     }
-    if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      setSensorNotice(
-        'Nota: los navegadores móviles suelen exigir HTTPS para el acelerómetro en IP LAN; si no detecta agitación, mantén presionado el recuadro 1:1 para batir.'
-      )
-    }
 
-    const dmEvent = DeviceMotionEvent as unknown as {
-      requestPermission?: () => Promise<'granted' | 'denied'>
-    }
-    if (typeof dmEvent.requestPermission === 'function') {
+    // Request iOS Motion & Orientation permissions synchronously in the tap gesture!
+    const dmEvent = (window as unknown as { DeviceMotionEvent?: { requestPermission?: () => Promise<'granted' | 'denied'> } }).DeviceMotionEvent
+    const doEvent = (window as unknown as { DeviceOrientationEvent?: { requestPermission?: () => Promise<'granted' | 'denied'> } }).DeviceOrientationEvent
+
+    if (dmEvent && typeof dmEvent.requestPermission === 'function') {
       try {
-        const result = await dmEvent.requestPermission()
-        if (result === 'granted') {
+        const motionRes = await dmEvent.requestPermission()
+        if (doEvent && typeof doEvent.requestPermission === 'function') {
+          try {
+            await doEvent.requestPermission()
+          } catch {
+            // Orientation permission optional if Motion was granted
+          }
+        }
+        if (motionRes === 'granted') {
           setSensorStatus('active')
+          setSensorNotice('¡Acelerómetro activo! Agita el móvil para batir y lanzar los dados.')
         } else {
           setSensorStatus('denied')
-          setSensorNotice('Permiso de movimiento denegado. Usa "Mantén para Batir" en pantalla.')
+          setSensorNotice(
+            'Permiso denegado en iOS. Cierra y reabre la pestaña en HTTPS, luego toca "Agitar Celular" y elige "Permitir".'
+          )
         }
       } catch {
         setSensorStatus('denied')
-        setSensorNotice('El navegador bloqueó el sensor (requiere HTTPS o permiso). Usa "Mantén para Batir".')
+        setSensorNotice(
+          'El navegador iOS bloqueó la solicitud de movimiento. Asegúrate de abrir la app en HTTPS (no en modo privado restringido) o usa "Mantén para Batir".'
+        )
       }
-    } else {
-      setSensorStatus('active')
+      return
     }
+
+    if (!('DeviceMotionEvent' in window) && !('DeviceOrientationEvent' in window)) {
+      setSensorStatus('unsupported')
+      setSensorNotice('Este navegador/PC no tiene sensores de movimiento. Usa "Mantén para Batir".')
+      return
+    }
+
+    setSensorStatus('active')
+    setSensorNotice('¡Acelerómetro activo! Agita tu teléfono para batir y lanzar los dados.')
+  }
+
+  const switchToHTTPS = () => {
+    const httpsURL = `https://${window.location.host}${window.location.pathname}${window.location.search}`
+    window.location.href = httpsURL
   }
 
   return (
@@ -614,7 +729,7 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
           }}
           onPointerUp={endHoldShake}
           onPointerCancel={endHoldShake}
-          className={`flex-1 min-w-[170px] py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition touch-none select-none ${
+          className={`flex-1 min-w-[165px] py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition touch-none select-none ${
             phaseUI === 'shaking'
               ? 'bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/40 scale-[0.98]'
               : 'bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white'
@@ -639,6 +754,19 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
         </button>
       </div>
 
+      {(isLANPlainHTTP || sensorStatus === 'needs_https') && (
+        <div className="max-w-[360px] mx-auto rounded-xl bg-violet-950/50 border border-violet-400/40 px-3 py-2 text-[11px] text-violet-200 flex items-center justify-between gap-2">
+          <span>Acelerómetro iOS/Android requiere HTTPS en LAN.</span>
+          <button
+            type="button"
+            onClick={switchToHTTPS}
+            className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold shrink-0 flex items-center gap-1"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" /> Cambiar a HTTPS
+          </button>
+        </div>
+      )}
+
       {sensorNotice && (
         <div className="max-w-[360px] mx-auto text-[11px] text-amber-200/90 bg-amber-950/40 border border-amber-500/30 rounded-xl px-3 py-2 flex items-start gap-1.5">
           <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
@@ -653,7 +781,6 @@ function drawPolyhedralDie(ctx: CanvasRenderingContext2D, d: DieBody, settled: b
   ctx.save()
   ctx.translate(d.x, d.y)
 
-  // Drop shadow
   ctx.save()
   ctx.translate(3, 5)
   ctx.rotate(d.angle)
@@ -662,7 +789,6 @@ function drawPolyhedralDie(ctx: CanvasRenderingContext2D, d: DieBody, settled: b
   ctx.fill()
   ctx.restore()
 
-  // Die body
   ctx.rotate(d.angle)
   drawDiePolygonPath(ctx, d.sides, d.radius)
 
@@ -687,10 +813,8 @@ function drawPolyhedralDie(ctx: CanvasRenderingContext2D, d: DieBody, settled: b
   ctx.lineWidth = settled ? 2.2 : 1.6
   ctx.stroke()
 
-  // Inner facet lines for polyhedral visual depth
   drawInnerFacetLines(ctx, d.sides, d.radius)
 
-  // Value text upright-readable when settled or rotating with die while tumbling
   ctx.fillStyle = isCrit || isFumble ? '#ffffff' : '#fef3c7'
   ctx.font = `800 ${Math.max(10, Math.round(d.radius * 0.72))}px ui-monospace, monospace`
   ctx.textAlign = 'center'
@@ -715,10 +839,8 @@ function drawDiePolygonPath(ctx: CanvasRenderingContext2D, sides: number, r: num
     ctx.closePath()
   } else if (sides === 6) {
     const s = r * 0.85
-    const cr = 5
-    ctx.roundRect(-s, -s, s * 2, s * 2, cr)
+    ctx.roundRect(-s, -s, s * 2, s * 2, 5)
   } else if (sides === 8 || sides === 10 || sides === 100) {
-    // Diamond / kite silhouette
     ctx.moveTo(0, -r)
     ctx.lineTo(r * 0.9, 0)
     ctx.lineTo(0, r)
@@ -734,7 +856,6 @@ function drawDiePolygonPath(ctx: CanvasRenderingContext2D, sides: number, r: num
     }
     ctx.closePath()
   } else {
-    // d20 & default: hexagon icosahedron silhouette
     for (let i = 0; i < 6; i++) {
       const a = -Math.PI / 2 + (i * Math.PI * 2) / 6
       const x = Math.cos(a) * r
@@ -751,7 +872,6 @@ function drawInnerFacetLines(ctx: CanvasRenderingContext2D, sides: number, r: nu
   ctx.strokeStyle = 'rgba(253, 230, 138, 0.28)'
   ctx.lineWidth = 1
   if (sides === 20) {
-    // Inner triangle of icosahedron
     ctx.beginPath()
     for (let i = 0; i < 3; i++) {
       const a = -Math.PI / 2 + (i * Math.PI * 4) / 6
