@@ -999,3 +999,38 @@ func (s *Store) ClearMapEntities() error {
 	_, err := s.db.Exec(`DELETE FROM map_entities WHERE session_id = ?`, DefaultSessionID)
 	return err
 }
+
+// SetPlayerAvatar updates a player's portrait image URL.
+func (s *Store) SetPlayerAvatar(playerID, avatarURL string) error {
+	_, err := s.db.Exec(`UPDATE players SET avatar_url = ? WHERE id = ?`, strings.TrimSpace(avatarURL), playerID)
+	return err
+}
+
+// UpdateMapEntityInitiative updates initiative participation, roll, portrait, and monster slug on a map entity.
+func (s *Store) UpdateMapEntityMeta(id string, inInitiative *bool, initiative *int, avatarURL, monsterSlug *string) error {
+	if inInitiative != nil {
+		val := 0
+		if *inInitiative {
+			val = 1
+		}
+		if _, err := s.db.Exec(`UPDATE map_entities SET in_initiative = ? WHERE id = ? AND session_id = ?`, val, id, DefaultSessionID); err != nil {
+			return err
+		}
+	}
+	if initiative != nil {
+		if _, err := s.db.Exec(`UPDATE map_entities SET initiative = ? WHERE id = ? AND session_id = ?`, *initiative, id, DefaultSessionID); err != nil {
+			return err
+		}
+	}
+	if avatarURL != nil {
+		if _, err := s.db.Exec(`UPDATE map_entities SET avatar_url = ? WHERE id = ? AND session_id = ?`, strings.TrimSpace(*avatarURL), id, DefaultSessionID); err != nil {
+			return err
+		}
+	}
+	if monsterSlug != nil {
+		if _, err := s.db.Exec(`UPDATE map_entities SET monster_slug = ? WHERE id = ? AND session_id = ?`, strings.TrimSpace(*monsterSlug), id, DefaultSessionID); err != nil {
+			return err
+		}
+	}
+	return nil
+}

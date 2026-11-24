@@ -29,13 +29,17 @@ interface TacticalMapCanvasProps {
   tempEvents?: TemporaryMapEvent[]
   localPlayerID: string
   activePlayerID: string
+  activeCombatantID?: string
   localPlayerName?: string
   localColor?: string
   isDM?: boolean
   dmMode?: 'move' | 'place'
   selectedDMTarget?: DMSelection | null
+  fullViewport?: boolean
+  focusTarget?: { x: number; y: number; tick: number } | null
   onMoveToken: (playerID: string, x: number, y: number) => void
   onCellClick?: (x: number, y: number) => void
+  onEntityClick?: (entity: MapEntity) => void
   onTempEvent?: (ev: TemporaryMapEvent) => void
   onUpdateFog?: (enabled: boolean, revealed: string[]) => void
 }
@@ -51,19 +55,24 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
   tempEvents = [],
   localPlayerID,
   activePlayerID,
+  activeCombatantID,
   localPlayerName = 'Mesa',
   localColor = '#fbbf24',
   isDM = false,
   dmMode = 'move',
   selectedDMTarget = null,
+  fullViewport = false,
+  focusTarget = null,
   onMoveToken,
   onCellClick,
+  onEntityClick,
   onTempEvent,
   onUpdateFog,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const bgImgRef = useRef<HTMLImageElement | null>(null)
+  const avatarCacheRef = useRef<Map<string, HTMLImageElement>>(new Map())
   const [imgLoadedTick, setImgLoadedTick] = useState(0)
 
   const [zoom, setZoom] = useState(1)
@@ -143,6 +152,34 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [fitToContainer])
+
+  // Center camera on focusTarget when user clicks a portrait in the initiative tracker
+  useEffect(() => {
+    if (!focusTarget || !containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    const targetZoom = Math.max(zoom, 1.05)
+    const cx = (focusTarget.x + 0.5) * LOGICAL_CELL_SIZE
+    const cy = (focusTarget.y + 0.5) * LOGICAL_CELL_SIZE
+    setZoom(targetZoom)
+    setPan({
+      x: rect.width / 2 - cx * targetZoom,
+      y: rect.height / 2 - cy * targetZoom,
+    })
+  }, [focusTarget?.tick])
+
+  const getCachedAvatar = (url?: string): HTMLImageElement | null => {
+    if (!url) return null
+    const existing = avatarCacheRef.current.get(url)
+    if (existing) {
+      return existing.complete && existing.naturalWidth > 0 ? existing : null
+    }
+    const img = new Image()
+    img.onload = () => setImgLoadedTick((t) => t + 1)
+    img.src = url
+    avatarCacheRef.current.set(url, img)
+    return null
+  }
 
   // High-performance requestAnimationFrame Canvas render loop
   useEffect(() => {
@@ -311,32 +348,55 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
               ctx.strokeRect(ex + ew * 0.18, ey + eh * 0.25, ew * 0.64, eh * 0.5)
             } else {
               const r = Math.min(ew, eh) * 0.4
-              if (ent.kind === 'enemy') {
+              const isEntTurn = Boolean(activeCombatantID && ent.id === activeCombatantID)
+              if (isEntTurn) {
                 ctx.beginPath()
-                for (let k = 0; k < 8; k++) {
-                  const a = (k * Math.PI) / 4 + Math.PI / 8
-                  const vx = ecx + Math.cos(a) * r
-                  const vy = ecy + Math.sin(a) * r
-                  if (k === 0) ctx.moveTo(vx, vy)
-                  else ctx.lineTo(vx, vy)
-                }
-                ctx.closePath()
-              } else {
+                ctx.arc(ecx, ecy, r * 1.25, 0, Math.PI * 2)
+                ctx.strokeStyle = '#fbbf24'
+                ctx.lineWidth = Math.max(2.5, 3.5 / zoom)
+                ctx.stroke()
+              }
+              const entAvatar = getCachedAvatar(ent.avatar_url)
+              if (entAvatar) {
+                ctx.save()
                 ctx.beginPath()
                 ctx.arc(ecx, ecy, r, 0, Math.PI * 2)
-              }
-              ctx.fillStyle = ent.color_hex || (ent.kind === 'enemy' ? '#dc2626' : '#3b82f6')
-              ctx.fill()
-              ctx.strokeStyle = isSelectedEnt ? '#ffffff' : '#090712'
-              ctx.lineWidth = isSelectedEnt ? 3 : 2
-              ctx.stroke()
+                ctx.clip()
+                ctx.drawImage(entAvatar, ecx - r, ecy - r, r * 2, r * 2)
+                ctx.restore()
+                ctx.beginPath()
+                ctx.arc(ecx, ecy, r, 0, Math.PI * 2)
+                ctx.strokeStyle = isSelectedEnt ? '#ffffff' : isEntTurn ? '#fbbf24' : ent.color_hex || '#dc2626'
+                ctx.lineWidth = isSelectedEnt ? 3 : 2
+                ctx.stroke()
+              } else {
+                if (ent.kind === 'enemy') {
+                  ctx.beginPath()
+                  for (let k = 0; k < 8; k++) {
+                    const a = (k * Math.PI) / 4 + Math.PI / 8
+                    const vx = ecx + Math.cos(a) * r
+                    const vy = ecy + Math.sin(a) * r
+                    if (k === 0) ctx.moveTo(vx, vy)
+                    else ctx.lineTo(vx, vy)
+                  }
+                  ctx.closePath()
+                } else {
+                  ctx.beginPath()
+                  ctx.arc(ecx, ecy, r, 0, Math.PI * 2)
+                }
+                ctx.fillStyle = ent.color_hex || (ent.kind === 'enemy' ? '#dc2626' : '#3b82f6')
+                ctx.fill()
+                ctx.strokeStyle = isSelectedEnt ? '#ffffff' : '#090712'
+                ctx.lineWidth = isSelectedEnt ? 3 : 2
+                ctx.stroke()
 
-              const tag = ent.name.slice(0, 2).toUpperCase()
-              ctx.fillStyle = '#ffffff'
-              ctx.font = `800 ${Math.max(10, r * 0.72)}px sans-serif`
-              ctx.textAlign = 'center'
-              ctx.textBaseline = 'middle'
-              ctx.fillText(tag, ecx, ecy)
+                const tag = ent.name.slice(0, 2).toUpperCase()
+                ctx.fillStyle = '#ffffff'
+                ctx.font = `800 ${Math.max(10, r * 0.72)}px sans-serif`
+                ctx.textAlign = 'center'
+                ctx.textBaseline = 'middle'
+                ctx.fillText(tag, ecx, ecy)
+              }
             }
 
             if (isSelectedEnt) {
@@ -412,7 +472,7 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
             ctx.save()
             if (p.token_hidden) ctx.globalAlpha = 0.45
 
-            if (p.id === activePlayerID) {
+            if (p.id === (activeCombatantID || activePlayerID)) {
               ctx.beginPath()
               ctx.arc(cx, cy, radius * 1.28, 0, Math.PI * 2)
               ctx.strokeStyle = '#fbbf24'
@@ -431,24 +491,39 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
               ctx.stroke()
             }
 
-            ctx.beginPath()
-            ctx.arc(cx, cy, radius, 0, Math.PI * 2)
-            ctx.fillStyle = p.color_hex || '#a855f7'
-            ctx.fill()
-            ctx.strokeStyle = '#090712'
-            ctx.lineWidth = Math.max(1.2, 2 / zoom)
-            ctx.stroke()
+            const pAvatar = getCachedAvatar(p.avatar_url)
+            if (pAvatar) {
+              ctx.save()
+              ctx.beginPath()
+              ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+              ctx.clip()
+              ctx.drawImage(pAvatar, cx - radius, cy - radius, radius * 2, radius * 2)
+              ctx.restore()
+              ctx.beginPath()
+              ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+              ctx.strokeStyle = p.color_hex || '#a855f7'
+              ctx.lineWidth = Math.max(1.6, 2.4 / zoom)
+              ctx.stroke()
+            } else {
+              ctx.beginPath()
+              ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+              ctx.fillStyle = p.color_hex || '#a855f7'
+              ctx.fill()
+              ctx.strokeStyle = '#090712'
+              ctx.lineWidth = Math.max(1.2, 2 / zoom)
+              ctx.stroke()
 
-            const initials = p.name
-              .split(/\s+/)
-              .slice(0, 2)
-              .map((word) => word[0]?.toUpperCase() || '')
-              .join('')
-            ctx.fillStyle = '#ffffff'
-            ctx.font = `bold ${Math.max(8, radius * 0.9)}px sans-serif`
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'middle'
-            ctx.fillText(initials || '?', cx, cy)
+              const initials = p.name
+                .split(/\s+/)
+                .slice(0, 2)
+                .map((word) => word[0]?.toUpperCase() || '')
+                .join('')
+              ctx.fillStyle = '#ffffff'
+              ctx.font = `bold ${Math.max(8, radius * 0.9)}px sans-serif`
+              ctx.textAlign = 'center'
+              ctx.textBaseline = 'middle'
+              ctx.fillText(initials || '?', cx, cy)
+            }
 
             // Player Condition badges (top right rim)
             if (p.conditions && p.conditions.length > 0) {
@@ -774,6 +849,17 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
         })
         return
       }
+      if (onEntityClick) {
+        const hitEnt = entities.find((ent) => {
+          if (ent.is_hidden && !isDM) return false
+          const sz = Math.max(1, Math.min(4, ent.size || 1))
+          return cell.x >= ent.x && cell.x < ent.x + sz && cell.y >= ent.y && cell.y < ent.y + sz
+        })
+        if (hitEnt && (!isDM || tool === 'move')) {
+          onEntityClick(hitEnt)
+          if (!isDM) return
+        }
+      }
       if (onCellClick) {
         onCellClick(cell.x, cell.y)
       } else if (localPlayerID) {
@@ -1019,7 +1105,11 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
 
       <div
         ref={containerRef}
-        className="relative w-full h-[380px] sm:h-[480px] rounded-xl overflow-hidden border border-violet-500/30 bg-[#07050f] touch-none select-none cursor-crosshair"
+        className={`relative w-full overflow-hidden bg-[#07050f] touch-none select-none cursor-crosshair ${
+          fullViewport
+            ? 'h-[calc(100vh-3.5rem)] rounded-none border-0'
+            : 'h-[380px] sm:h-[480px] rounded-xl border border-violet-500/30'
+        }`}
       >
         <canvas
           ref={canvasRef}

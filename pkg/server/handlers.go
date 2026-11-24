@@ -61,6 +61,9 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 	if err := os.MkdirAll(filepath.Join(uploadDir, "sheets"), 0o755); err != nil {
 		return nil, err
 	}
+	if err := os.MkdirAll(filepath.Join(uploadDir, "avatars"), 0o755); err != nil {
+		return nil, err
+	}
 
 	if dmPIN == "" {
 		pin, err := GenerateSessionPIN()
@@ -139,6 +142,7 @@ func (s *Server) mountRoutes() {
 
 		api.Post("/upload/map", s.handleUploadMap)
 		api.Post("/upload/sheet", s.handleUploadSheet)
+		api.Post("/upload/avatar", s.handleUploadAvatar)
 
 		api.Get("/player/{id}/notes", s.handleGetPlayerNotes)
 		api.Put("/player/{id}/notes", s.handleSavePlayerNotes)
@@ -503,6 +507,48 @@ func (s *Server) handleUploadSheet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]string{"file_path": publicPath})
+}
+
+func (s *Server) handleUploadAvatar(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20) // 5 MB max avatar
+	if err := r.ParseMultipartForm(5 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "La imagen supera el límite de 5 MB"})
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Campo 'file' requerido"})
+		return
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Formato permitido: PNG, JPG, WebP, GIF"})
+		return
+	}
+
+	filename := fmt.Sprintf("av_%s%s", uuid.NewString()[:10], ext)
+	dstPath := filepath.Join(s.UploadDir, "avatars", filename)
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	publicPath := "/uploads/avatars/" + filename
+	if pid := strings.TrimSpace(r.FormValue("player_id")); pid != "" {
+		_ = s.Store.SetPlayerAvatar(pid, publicPath)
+		s.Hub.BroadcastStateSync()
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"file_path": publicPath})
 }
 
