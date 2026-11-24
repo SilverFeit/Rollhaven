@@ -81,6 +81,9 @@ type Player struct {
 	AuraRadius         int             `json:"aura_radius"`
 	AuraColor          string          `json:"aura_color"`
 	StatsJSON          json.RawMessage `json:"stats_json,omitempty"`
+	UserID             string          `json:"user_id,omitempty"`
+	CharacterID        string          `json:"character_id,omitempty"`
+	AvatarURL          string          `json:"avatar_url,omitempty"`
 	CreatedAt          time.Time       `json:"created_at"`
 	LastSeen           time.Time       `json:"last_seen"`
 	Inventory          []InventoryItem `json:"inventory,omitempty"`
@@ -131,6 +134,8 @@ type MapEntity struct {
 	AuraColor    string    `json:"aura_color"`
 	InInitiative bool      `json:"in_initiative"`
 	Initiative   int       `json:"initiative"`
+	AvatarURL    string    `json:"avatar_url,omitempty"`
+	MonsterSlug  string    `json:"monster_slug,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -151,7 +156,7 @@ func New(db *sql.DB) (*Store, error) {
 func (s *Store) ensureDefaults() error {
 	_, err := s.db.Exec(`
 		INSERT OR IGNORE INTO sessions (id, is_active, map_enabled, map_rows, map_cols, map_image_path, map_grid_color, map_grid_opacity, current_turn_index, active_campaign_id)
-		VALUES (?, 1, 0, 10, 10, '', '#ffffff', 0.35, 0, 'default')
+		VALUES (?, 1, 1, 10, 10, '', '#ffffff', 0.35, 0, 'default')
 	`, DefaultSessionID)
 	if err != nil {
 		return fmt.Errorf("ensure default session: %w", err)
@@ -395,13 +400,16 @@ func (s *Store) GetPlayer(id string) (Player, error) {
 		       latency_ms, COALESCE(NULLIF(role, ''), 'PLAYER'), COALESCE(NULLIF(membership_status, ''), 'ACTIVE'),
 		       COALESCE(NULLIF(conditions_json, ''), '[]'), COALESCE(aura_radius, 0), COALESCE(NULLIF(aura_color, ''), '#a855f7'),
 		       COALESCE(NULLIF(stats_json, ''), '{}'),
+		       COALESCE(user_id, ''), COALESCE(character_id, ''), COALESCE(avatar_url, ''),
 		       created_at, last_seen
 		FROM players WHERE id = ?
 	`, id).Scan(
 		&p.ID, &p.SessionID, &p.Name, &p.Initiative, &p.RaceIcon, &p.ColorHex,
 		&p.CharacterSheetPath, &p.TokenX, &p.TokenY, &tokenHidden,
 		&p.TurnOrder, &manualOrder, &isConnected, &p.ClientIP, &p.UserAgent,
-		&p.LatencyMS, &p.Role, &p.MembershipStatus, &condStr, &p.AuraRadius, &p.AuraColor, &statsStr, &p.CreatedAt, &p.LastSeen,
+		&p.LatencyMS, &p.Role, &p.MembershipStatus, &condStr, &p.AuraRadius, &p.AuraColor, &statsStr,
+		&p.UserID, &p.CharacterID, &p.AvatarURL,
+		&p.CreatedAt, &p.LastSeen,
 	)
 	if err != nil {
 		return Player{}, err
@@ -428,6 +436,7 @@ func (s *Store) ListPlayersOrdered() ([]Player, error) {
 		       latency_ms, COALESCE(NULLIF(role, ''), 'PLAYER'), COALESCE(NULLIF(membership_status, ''), 'ACTIVE'),
 		       COALESCE(NULLIF(conditions_json, ''), '[]'), COALESCE(aura_radius, 0), COALESCE(NULLIF(aura_color, ''), '#a855f7'),
 		       COALESCE(NULLIF(stats_json, ''), '{}'),
+		       COALESCE(user_id, ''), COALESCE(character_id, ''), COALESCE(avatar_url, ''),
 		       created_at, last_seen
 		FROM players WHERE session_id = ?
 	`, DefaultSessionID)
@@ -446,7 +455,9 @@ func (s *Store) ListPlayersOrdered() ([]Player, error) {
 			&p.ID, &p.SessionID, &p.Name, &p.Initiative, &p.RaceIcon, &p.ColorHex,
 			&p.CharacterSheetPath, &p.TokenX, &p.TokenY, &tokenHidden,
 			&p.TurnOrder, &manualOrder, &isConnected, &p.ClientIP, &p.UserAgent,
-			&p.LatencyMS, &p.Role, &p.MembershipStatus, &condStr, &p.AuraRadius, &p.AuraColor, &statsStr, &p.CreatedAt, &p.LastSeen,
+			&p.LatencyMS, &p.Role, &p.MembershipStatus, &condStr, &p.AuraRadius, &p.AuraColor, &statsStr,
+			&p.UserID, &p.CharacterID, &p.AvatarURL,
+			&p.CreatedAt, &p.LastSeen,
 		); err != nil {
 			return nil, err
 		}
@@ -808,7 +819,7 @@ func (s *Store) ListMapEntities() ([]MapEntity, error) {
 	rows, err := s.db.Query(`
 		SELECT id, session_id, kind, name, x, y, size, color_hex, hp_current, hp_max, note, is_hidden,
 		       COALESCE(NULLIF(conditions_json, ''), '[]'), COALESCE(aura_radius, 0), COALESCE(aura_color, ''),
-		       COALESCE(in_initiative, 0), COALESCE(initiative, 10), created_at
+		       COALESCE(in_initiative, 0), COALESCE(initiative, 10), COALESCE(avatar_url, ''), COALESCE(monster_slug, ''), created_at
 		FROM map_entities
 		WHERE session_id = ?
 		ORDER BY created_at ASC, name ASC
@@ -827,7 +838,7 @@ func (s *Store) ListMapEntities() ([]MapEntity, error) {
 			&e.ID, &e.SessionID, &e.Kind, &e.Name,
 			&e.X, &e.Y, &e.Size, &e.ColorHex,
 			&e.HPCurrent, &e.HPMax, &e.Note, &hidden,
-			&condStr, &e.AuraRadius, &e.AuraColor, &inInit, &e.Initiative, &e.CreatedAt,
+			&condStr, &e.AuraRadius, &e.AuraColor, &inInit, &e.Initiative, &e.AvatarURL, &e.MonsterSlug, &e.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

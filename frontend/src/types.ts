@@ -55,6 +55,9 @@ export interface Player {
   aura_radius?: number
   aura_color?: string
   stats_json?: QuickSheetStats
+  user_id?: string
+  character_id?: string
+  avatar_url?: string
   created_at: string
   last_seen: string
   inventory?: InventoryItem[]
@@ -285,7 +288,37 @@ export interface MapEntity {
   aura_color?: string
   in_initiative?: boolean
   initiative?: number
+  avatar_url?: string
+  monster_slug?: string
   created_at: string
+}
+
+export interface UserAccount {
+  id: string
+  username: string
+  display_name: string
+  active_character_id: string
+  created_at: string
+  last_login_at: string
+}
+
+export interface CharacterRecord {
+  id: string
+  campaign_id: string
+  user_id: string
+  name: string
+  avatar_url: string
+  level: number
+  species_slug: string
+  species_name: string
+  class_slug: string
+  class_name: string
+  subclass_name: string
+  background_slug: string
+  background_name: string
+  sheet_json: Record<string, unknown>
+  created_at: string
+  updated_at: string
 }
 
 export interface TemporaryMapEvent {
@@ -333,6 +366,8 @@ export interface StateSnapshot {
   active_campaign?: Campaign
   campaigns?: Campaign[]
   campaign_sessions?: CampaignSession[]
+  users?: UserAccount[]
+  characters?: CharacterRecord[]
   players: Player[]
   map_entities: MapEntity[]
   map_scenes?: MapScene[]

@@ -15,7 +15,7 @@ import (
 var schemaSQL string
 
 // CurrentSchemaVersion tracks the SQLite migration version for Rollhaven.
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 
 // Open initializes a pure-Go SQLite database at dbPath, ensures its parent directory exists,
 // configures WAL mode and foreign keys, and applies idempotent schema migrations.
@@ -92,6 +92,11 @@ func applyColumnMigrations(db *sql.DB) error {
 		`ALTER TABLE map_entities ADD COLUMN aura_color TEXT DEFAULT ''`,
 		`ALTER TABLE map_entities ADD COLUMN in_initiative INTEGER DEFAULT 0`,
 		`ALTER TABLE map_entities ADD COLUMN initiative INTEGER DEFAULT 10`,
+		`ALTER TABLE players ADD COLUMN user_id TEXT DEFAULT ''`,
+		`ALTER TABLE players ADD COLUMN character_id TEXT DEFAULT ''`,
+		`ALTER TABLE players ADD COLUMN avatar_url TEXT DEFAULT ''`,
+		`ALTER TABLE map_entities ADD COLUMN avatar_url TEXT DEFAULT ''`,
+		`ALTER TABLE map_entities ADD COLUMN monster_slug TEXT DEFAULT ''`,
 	}
 	for _, stmt := range alterStatements {
 		if _, err := db.Exec(stmt); err != nil {
