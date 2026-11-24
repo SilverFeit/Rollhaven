@@ -79,9 +79,9 @@ const PlayerWorkspace: React.FC = () => {
   const isDisabled = revoked || currentPlayer.membership_status === 'REVOKED'
 
   return (
-    <div className="flex-1 flex flex-col bg-[#090712] text-slate-100 overflow-hidden">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-[#090712] text-slate-100 overflow-hidden">
       {/* Compact VTT Top Bar */}
-      <header className="h-14 z-30 border-b border-violet-500/25 bg-[#0e091b]/95 backdrop-blur-md px-3.5 flex items-center justify-between gap-2 shrink-0">
+      <header className="h-11 z-30 border-b border-violet-500/25 bg-[#0e091b]/95 backdrop-blur-md px-2.5 sm:px-3.5 flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           <img src="/app-icon.png" alt="Rollhaven" className="w-8 h-8 rounded-lg border border-violet-500/40 shrink-0" />
           <div className="min-w-0">
@@ -248,7 +248,7 @@ const PlayerWorkspace: React.FC = () => {
 
         {/* Floating Right Action Chat & Interactive Roll Tracker */}
         {trackerOpen && (
-          <aside className="absolute top-20 sm:top-3 bottom-16 right-2 sm:right-3 z-20 w-[calc(100vw-1rem)] sm:w-80 rounded-2xl border border-violet-500/35 bg-[#120d22]/90 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
+          <aside className="absolute top-14 sm:top-3 bottom-20 right-2 sm:right-3 z-20 w-[calc(100vw-1rem)] sm:w-80 rounded-2xl border border-violet-500/35 bg-[#120d22]/90 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
             <div className="px-3.5 py-2 border-b border-violet-500/20 bg-[#090712]/80 flex items-center justify-between">
               <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-200">
                 Tracker de Tiradas &amp; Chat
@@ -277,7 +277,7 @@ const PlayerWorkspace: React.FC = () => {
 
         {/* Floating Slide-Over Drawer for Character Sheet / Decisions / Chat / Inventory / Notes */}
         {drawer && (
-          <aside className="absolute top-2 bottom-2 left-2 sm:left-3 z-30 w-[calc(100vw-1rem)] sm:w-[440px] max-w-full rounded-2xl border border-violet-500/35 bg-[#120d22]/95 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
+          <aside className="absolute top-2 bottom-20 left-2 sm:left-3 z-30 w-[calc(100vw-1rem)] sm:w-[440px] max-w-full rounded-2xl border border-violet-500/35 bg-[#120d22]/95 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
             <div className="px-4 py-2.5 border-b border-violet-500/20 bg-[#090712]/80 flex items-center justify-between">
               <span className="text-xs font-extrabold uppercase tracking-wider text-amber-200">
                 {drawer === 'SHEET'
@@ -367,8 +367,8 @@ const PlayerWorkspace: React.FC = () => {
           </aside>
         )}
 
-        {/* Bottom Player Quick Action Hotbar */}
-        <div className="pointer-events-none absolute bottom-3 inset-x-0 z-20 flex justify-center px-3">
+        {/* Bottom-Right Radial Player Quick Action Menu */}
+        <div className="pointer-events-none absolute bottom-4 right-4 z-30 flex items-center justify-end">
           <PlayerQuickHotbar
             player={currentPlayer}
             character={assignedCharacter}
@@ -428,14 +428,22 @@ export function App() {
     setRoute(path)
   }
 
+  const isDMRoute = route.startsWith('/dm')
+
   return (
-    <div className="min-h-screen flex flex-col bg-[#090712]">
-      {route.startsWith('/dm') ? (
+    <div
+      className={
+        isDMRoute
+          ? 'min-h-screen flex flex-col bg-[#090712]'
+          : 'h-[100dvh] max-h-[100dvh] w-screen overflow-hidden flex flex-col bg-[#090712]'
+      }
+    >
+      {isDMRoute ? (
         <DMDashboard onGoPlayerView={() => navigate('/')} />
       ) : (
         <PlayerWorkspace />
       )}
-      <AppFooter version={appVersion} license={appLicense} />
+      {isDMRoute && <AppFooter version={appVersion} license={appLicense} />}
     </div>
   )
 }
