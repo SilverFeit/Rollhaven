@@ -23,6 +23,7 @@ import { InitiativeOverlayTracker } from './components/InitiativeOverlayTracker'
 import { CharacterWizard } from './components/CharacterWizard'
 import { InteractiveCharacterSheet } from './components/InteractiveCharacterSheet'
 import { ActionChatTracker } from './components/ActionChatTracker'
+import { PlayerQuickHotbar } from './components/PlayerQuickHotbar'
 
 type DrawerKind = null | 'SHEET' | 'DECISIONS' | 'COMPANION' | 'INVENTORY' | 'NOTES' | 'RACE'
 
@@ -365,6 +366,29 @@ const PlayerWorkspace: React.FC = () => {
             </div>
           </aside>
         )}
+
+        {/* Bottom Player Quick Action Hotbar */}
+        <div className="pointer-events-none absolute bottom-3 inset-x-0 z-20 flex justify-center px-3">
+          <PlayerQuickHotbar
+            player={currentPlayer}
+            character={assignedCharacter}
+            isMyTurn={
+              Boolean(playerID) &&
+              (snapshot.active_combatant_id
+                ? snapshot.active_combatant_id === playerID
+                : snapshot.active_player_id === playerID)
+            }
+            disabled={isDisabled}
+            sheetOpen={drawer === 'SHEET'}
+            trackerOpen={trackerOpen}
+            decisionsOpen={drawer === 'DECISIONS'}
+            onRollAction={(payload) => sendMessage('ROLL_ACTION', { ...payload, visibility: 'PUBLIC' })}
+            onEndTurn={() => sendMessage('END_TURN', {})}
+            onToggleSheet={() => setDrawer((d) => (d === 'SHEET' ? null : 'SHEET'))}
+            onToggleTracker={() => setTrackerOpen((v) => !v)}
+            onToggleDecisions={() => setDrawer((d) => (d === 'DECISIONS' ? null : 'DECISIONS'))}
+          />
+        </div>
       </main>
 
       <CharacterWizard
