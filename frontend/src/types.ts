@@ -55,6 +55,9 @@ export interface Player {
   aura_radius?: number
   aura_color?: string
   stats_json?: QuickSheetStats
+  user_id?: string
+  character_id?: string
+  avatar_url?: string
   created_at: string
   last_seen: string
   inventory?: InventoryItem[]
@@ -231,6 +234,25 @@ export interface WheelDetail {
   options: string[]
 }
 
+export interface RollSource {
+  kind: 'weapon' | 'spell' | 'skill' | 'save' | 'ability' | 'feature' | 'monster' | 'initiative' | string
+  name: string
+  subtitle?: string
+}
+
+export interface InteractiveRollAction {
+  id: string
+  kind: 'SAVE' | 'DAMAGE' | 'CHECK' | 'HEAL' | string
+  label: string
+  ability?: AbilityKey | string
+  skill?: string
+  dc?: number
+  formula?: string
+  damage_type?: string
+}
+
+export type AbilityKey = 'FUE' | 'DES' | 'CON' | 'INT' | 'SAB' | 'CAR'
+
 export interface RollBroadcast {
   id: number
   timestamp: string
@@ -238,7 +260,7 @@ export interface RollBroadcast {
   player_name: string
   player_color: string
   race_icon: string
-  set_type: 'DICE' | 'COIN' | 'MAGIC_8_BALL' | 'SPINNER' | 'WHEEL'
+  set_type: 'DICE' | 'COIN' | 'MAGIC_8_BALL' | 'SPINNER' | 'WHEEL' | 'ABILITY_CARD'
   result_summary: string
   detail: DiceDetail | CoinDetail | Magic8Detail | SpinnerDetail | WheelDetail | Record<string, unknown> | null
   visibility?: RollVisibility
@@ -248,6 +270,10 @@ export interface RollBroadcast {
   is_fumble?: boolean
   is_edge?: boolean
   out_of_turn?: boolean
+  source?: RollSource
+  interactive_actions?: InteractiveRollAction[]
+  target_dc?: number
+  save_outcome?: 'SUCCESS' | 'FAILURE' | string
 }
 
 export interface ActionLogEntry {
@@ -285,7 +311,37 @@ export interface MapEntity {
   aura_color?: string
   in_initiative?: boolean
   initiative?: number
+  avatar_url?: string
+  monster_slug?: string
   created_at: string
+}
+
+export interface UserAccount {
+  id: string
+  username: string
+  display_name: string
+  active_character_id: string
+  created_at: string
+  last_login_at: string
+}
+
+export interface CharacterRecord {
+  id: string
+  campaign_id: string
+  user_id: string
+  name: string
+  avatar_url: string
+  level: number
+  species_slug: string
+  species_name: string
+  class_slug: string
+  class_name: string
+  subclass_name: string
+  background_slug: string
+  background_name: string
+  sheet_json: Record<string, unknown>
+  created_at: string
+  updated_at: string
 }
 
 export interface TemporaryMapEvent {
@@ -327,13 +383,35 @@ export interface TLSStatus {
   tunnel: TunnelStatus
 }
 
+export interface Combatant {
+  id: string
+  kind: 'player' | 'monster' | string
+  name: string
+  initiative: number
+  avatar_url?: string
+  race_icon?: string
+  color_hex: string
+  hp_current?: number
+  hp_max?: number
+  token_x: number
+  token_y: number
+  is_hidden: boolean
+  is_connected: boolean
+  monster_slug?: string
+  character_id?: string
+}
+
 export interface StateSnapshot {
   sequence?: number
   session: SessionConfig
   active_campaign?: Campaign
   campaigns?: Campaign[]
   campaign_sessions?: CampaignSession[]
+  users?: UserAccount[]
+  characters?: CharacterRecord[]
   players: Player[]
+  combatants?: Combatant[]
+  active_combatant_id?: string
   map_entities: MapEntity[]
   map_scenes?: MapScene[]
   campaign_notes?: CampaignNote[]
@@ -343,6 +421,7 @@ export interface StateSnapshot {
   current_turn_index: number
   active_player_id: string
   current_turn_rolls: RollBroadcast[]
+  recent_rolls?: RollBroadcast[]
   last_result?: RollBroadcast
   action_log: ActionLogEntry[]
   strict_turn_rolls: boolean

@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_active INTEGER DEFAULT 1,
-    map_enabled INTEGER DEFAULT 0,
+    map_enabled INTEGER DEFAULT 1,
     map_rows INTEGER DEFAULT 10,
     map_cols INTEGER DEFAULT 10,
     map_image_path TEXT DEFAULT '',
@@ -19,6 +19,34 @@ CREATE TABLE IF NOT EXISTS sessions (
     fog_revealed_json TEXT DEFAULT '[]',
     round_number INTEGER DEFAULT 1,
     scene_cards_json TEXT DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    display_name TEXT NOT NULL,
+    active_character_id TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS characters (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL DEFAULT 'default',
+    user_id TEXT DEFAULT '',
+    name TEXT NOT NULL,
+    avatar_url TEXT DEFAULT '',
+    level INTEGER DEFAULT 1,
+    species_slug TEXT DEFAULT '',
+    species_name TEXT DEFAULT '',
+    class_slug TEXT DEFAULT '',
+    class_name TEXT DEFAULT '',
+    subclass_name TEXT DEFAULT '',
+    background_slug TEXT DEFAULT '',
+    background_name TEXT DEFAULT '',
+    sheet_json TEXT NOT NULL DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -66,6 +94,9 @@ CREATE TABLE IF NOT EXISTS players (
     aura_radius INTEGER DEFAULT 0,
     aura_color TEXT DEFAULT '#a855f7',
     stats_json TEXT DEFAULT '{}',
+    user_id TEXT DEFAULT '',
+    character_id TEXT DEFAULT '',
+    avatar_url TEXT DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(session_id) REFERENCES sessions(id)
@@ -127,6 +158,8 @@ CREATE TABLE IF NOT EXISTS map_entities (
     aura_color TEXT DEFAULT '',
     in_initiative INTEGER DEFAULT 0,
     initiative INTEGER DEFAULT 10,
+    avatar_url TEXT DEFAULT '',
+    monster_slug TEXT DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(session_id) REFERENCES sessions(id)
 );

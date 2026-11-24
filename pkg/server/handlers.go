@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/SilverFeit/Rollhaven/pkg/compendium"
 	appembed "github.com/SilverFeit/Rollhaven/pkg/embed"
 	"github.com/SilverFeit/Rollhaven/pkg/store"
 	"github.com/go-chi/chi/v5"
@@ -27,6 +29,7 @@ type Server struct {
 	Router              *chi.Mux
 	Hub                 *Hub
 	Store               *store.Store
+	Compendium          compendium.CompendiumRepository
 	Tunnel              *TunnelManager
 	DataDir             string
 	UploadDir           string
@@ -56,6 +59,9 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Join(uploadDir, "sheets"), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(uploadDir, "avatars"), 0o755); err != nil {
 		return nil, err
 	}
 
@@ -136,6 +142,7 @@ func (s *Server) mountRoutes() {
 
 		api.Post("/upload/map", s.handleUploadMap)
 		api.Post("/upload/sheet", s.handleUploadSheet)
+		api.Post("/upload/avatar", s.handleUploadAvatar)
 
 		api.Get("/player/{id}/notes", s.handleGetPlayerNotes)
 		api.Put("/player/{id}/notes", s.handleSavePlayerNotes)
@@ -153,6 +160,19 @@ func (s *Server) mountRoutes() {
 		api.Post("/campaigns/import", s.handleImportCampaign)
 		api.Get("/backups/download", s.handleDownloadBackupZip)
 		api.Post("/backups/restore", s.handleRestoreBackupZip)
+
+		api.Get("/compendium/status", s.handleCompendiumStatus)
+		api.Post("/compendium/import", s.handleCompendiumImport)
+		api.Get("/compendium/{category}", s.handleCompendiumList)
+		api.Get("/compendium/{category}/{slug}", s.handleCompendiumGet)
+
+		api.Get("/users", s.handleListUsers)
+		api.Post("/users/login", s.handleUserLogin)
+		api.Get("/characters", s.handleListCharacters)
+		api.Post("/characters", s.handleUpsertCharacter)
+		api.Put("/characters/{id}", s.handleUpsertCharacter)
+		api.Delete("/characters/{id}", s.handleDeleteCharacter)
+		api.Post("/dm/assign-character", s.handleDMAssignCharacter)
 	})
 
 	// Serve uploaded maps & character sheets
@@ -490,6 +510,48 @@ func (s *Server) handleUploadSheet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"file_path": publicPath})
 }
 
+func (s *Server) handleUploadAvatar(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20) // 5 MB max avatar
+	if err := r.ParseMultipartForm(5 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "La imagen supera el límite de 5 MB"})
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Campo 'file' requerido"})
+		return
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Formato permitido: PNG, JPG, WebP, GIF"})
+		return
+	}
+
+	filename := fmt.Sprintf("av_%s%s", uuid.NewString()[:10], ext)
+	dstPath := filepath.Join(s.UploadDir, "avatars", filename)
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	publicPath := "/uploads/avatars/" + filename
+	if pid := strings.TrimSpace(r.FormValue("player_id")); pid != "" {
+		_ = s.Store.SetPlayerAvatar(pid, publicPath)
+		s.Hub.BroadcastStateSync()
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"file_path": publicPath})
+}
+
 func (s *Server) handleServeUpload(w http.ResponseWriter, r *http.Request) {
 	rel := strings.TrimPrefix(r.URL.Path, "/uploads/")
 	clean := filepath.Clean(rel)
@@ -818,4 +880,176 @@ func (s *Server) handleRestoreBackupZip(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Hub.BroadcastStateSync()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
+}
+
+func (s *Server) handleCompendiumStatus(w http.ResponseWriter, r *http.Request) {
+	if s.Compendium == nil {
+		writeJSON(w, http.StatusOK, compendium.CompendiumStatus{
+			Driver:    "none",
+			Connected: false,
+			Ruleset:   "2024",
+			Counts:    map[string]int{},
+			Error:     "Compendio no inicializado",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Compendium.HealthCheck())
+}
+
+func (s *Server) handleCompendiumList(w http.ResponseWriter, r *http.Request) {
+	if s.Compendium == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Compendio no inicializado"})
+		return
+	}
+	cat := chi.URLParam(r, "category")
+	filter := compendium.ListFilter{
+		Query:       r.URL.Query().Get("q"),
+		Ruleset:     r.URL.Query().Get("ruleset"),
+		ClassSlug:   r.URL.Query().Get("class"),
+		SubCategory: r.URL.Query().Get("category"),
+	}
+	if lvlStr := strings.TrimSpace(r.URL.Query().Get("level")); lvlStr != "" {
+		if lvl, err := strconv.Atoi(lvlStr); err == nil {
+			filter.Level = &lvl
+		}
+	}
+	entries, err := s.Compendium.ListEntries(cat, filter)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": entries, "count": len(entries)})
+}
+
+func (s *Server) handleCompendiumGet(w http.ResponseWriter, r *http.Request) {
+	if s.Compendium == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Compendio no inicializado"})
+		return
+	}
+	cat := chi.URLParam(r, "category")
+	slug := chi.URLParam(r, "slug")
+	entry, err := s.Compendium.GetEntry(cat, slug)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Entrada no encontrada"})
+		return
+	}
+	writeJSON(w, http.StatusOK, entry)
+}
+
+func (s *Server) handleCompendiumImport(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede importar al compendio"})
+		return
+	}
+	if s.Compendium == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Compendio no inicializado"})
+		return
+	}
+	var bundle compendium.CompendiumBundle
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 25<<20)).Decode(&bundle); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON de compendio inválido"})
+		return
+	}
+	count, err := s.Compendium.ImportBundle(bundle)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"imported": count})
+}
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.Store.ListUsers()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	chars, _ := s.Store.ListCharacters("")
+	writeJSON(w, http.StatusOK, map[string]any{"users": users, "characters": chars})
+}
+
+func (s *Server) handleUserLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		UserID   string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+	u, err := s.Store.LoginUser(body.Username, body.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	chars, _ := s.Store.ListCharacters("")
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]any{"user": u, "characters": chars})
+}
+
+func (s *Server) handleListCharacters(w http.ResponseWriter, r *http.Request) {
+	campID := strings.TrimSpace(r.URL.Query().Get("campaign_id"))
+	chars, err := s.Store.ListCharacters(campID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"characters": chars})
+}
+
+func (s *Server) handleUpsertCharacter(w http.ResponseWriter, r *http.Request) {
+	var body store.Character
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON de personaje inválido"})
+		return
+	}
+	if paramID := chi.URLParam(r, "id"); paramID != "" {
+		body.ID = paramID
+	}
+	ch, err := s.Store.UpsertCharacter(body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, ch)
+}
+
+func (s *Server) handleDeleteCharacter(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede eliminar personajes"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.Store.DeleteCharacter(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleDMAssignCharacter(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede asignar personajes"})
+		return
+	}
+	var body struct {
+		UserID      string `json:"user_id"`
+		PlayerID    string `json:"player_id"`
+		CharacterID string `json:"character_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+	if err := s.Store.AssignCharacter(body.UserID, body.PlayerID, body.CharacterID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "assigned"})
 }

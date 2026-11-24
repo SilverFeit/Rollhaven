@@ -81,6 +81,10 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
           }
           case 'JOIN_ACK': {
             const pid = msg.player_id || msg.payload?.player?.id
+            const uid = msg.payload?.user?.id
+            if (uid) {
+              localStorage.setItem('rollhaven_user_id', uid)
+            }
             if (pid) {
               localStorage.setItem(STORAGE_PLAYER_ID_KEY, pid)
               setPlayerID(pid)
@@ -185,6 +189,7 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
 
   const clearSession = useCallback(() => {
     localStorage.removeItem(STORAGE_PLAYER_ID_KEY)
+    localStorage.removeItem('rollhaven_user_id')
     setPlayerID('')
     setRevoked(false)
     setKicked(false)

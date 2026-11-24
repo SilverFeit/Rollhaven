@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { MapEntity, Player, SessionConfig, TemporaryMapEvent } from '../types'
 import { DND_CONDITIONS } from '../lib/srdCompendiumAndGenerators'
+import { useIsDesktop } from '../lib/useMediaQuery'
 
 export interface DMSelection {
   kind: 'player' | 'entity'
@@ -29,13 +30,17 @@ interface TacticalMapCanvasProps {
   tempEvents?: TemporaryMapEvent[]
   localPlayerID: string
   activePlayerID: string
+  activeCombatantID?: string
   localPlayerName?: string
   localColor?: string
   isDM?: boolean
   dmMode?: 'move' | 'place'
   selectedDMTarget?: DMSelection | null
+  fullViewport?: boolean
+  focusTarget?: { x: number; y: number; tick: number } | null
   onMoveToken: (playerID: string, x: number, y: number) => void
   onCellClick?: (x: number, y: number) => void
+  onEntityClick?: (entity: MapEntity) => void
   onTempEvent?: (ev: TemporaryMapEvent) => void
   onUpdateFog?: (enabled: boolean, revealed: string[]) => void
 }
@@ -51,19 +56,24 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
   tempEvents = [],
   localPlayerID,
   activePlayerID,
+  activeCombatantID,
   localPlayerName = 'Mesa',
   localColor = '#fbbf24',
   isDM = false,
   dmMode = 'move',
   selectedDMTarget = null,
+  fullViewport = false,
+  focusTarget = null,
   onMoveToken,
   onCellClick,
+  onEntityClick,
   onTempEvent,
   onUpdateFog,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const bgImgRef = useRef<HTMLImageElement | null>(null)
+  const avatarCacheRef = useRef<Map<string, HTMLImageElement>>(new Map())
   const [imgLoadedTick, setImgLoadedTick] = useState(0)
 
   const [zoom, setZoom] = useState(1)
@@ -71,13 +81,24 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
   const [hoverCell, setHoverCell] = useState<{ x: number; y: number } | null>(null)
 
   const [tool, setTool] = useState<CanvasTool>(isDM && dmMode === 'place' ? 'place' : 'move')
-  const [aoeShape, setAoeShape] = useState<'sphere' | 'cone' | 'cube' | 'line'>('sphere')
+  const [toolsRadialOpen, setToolsRadialOpen] = useState(false)
+  const isDesktop = useIsDesktop()
+  const [aoeShape, setAoeShape] = useState<'sphere' | 'cone' | 'cube' | 'line'>('cone')
   const [aoeRadiusFt, setAoeRadiusFt] = useState<number>(20)
+  const [aoeOrigin, setAoeOrigin] = useState<{ x: number; y: number } | null>(null)
+  const [aoeTarget, setAoeTarget] = useState<{ x: number; y: number } | null>(null)
 
   // Local transient ruler / draw state while dragging before emitting or during drag
   const [rulerStart, setRulerStart] = useState<{ x: number; y: number } | null>(null)
   const [rulerEnd, setRulerEnd] = useState<{ x: number; y: number } | null>(null)
   const [drawStroke, setDrawStroke] = useState<{ x: number; y: number }[]>([])
+
+  useEffect(() => {
+    if (tool !== 'aoe') {
+      setAoeOrigin(null)
+      setAoeTarget(null)
+    }
+  }, [tool])
 
   // Keep external dmMode in sync when DM switches between Move/Place in parent UI
   useEffect(() => {
@@ -142,7 +163,35 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
     const onResize = () => fitToContainer()
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [fitToContainer])
+  }, [fitToContainer, isDesktop])
+
+  // Center camera on focusTarget when user clicks a portrait in the initiative tracker
+  useEffect(() => {
+    if (!focusTarget || !containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    const targetZoom = Math.max(zoom, 1.05)
+    const cx = (focusTarget.x + 0.5) * LOGICAL_CELL_SIZE
+    const cy = (focusTarget.y + 0.5) * LOGICAL_CELL_SIZE
+    setZoom(targetZoom)
+    setPan({
+      x: rect.width / 2 - cx * targetZoom,
+      y: rect.height / 2 - cy * targetZoom,
+    })
+  }, [focusTarget?.tick])
+
+  const getCachedAvatar = (url?: string): HTMLImageElement | null => {
+    if (!url) return null
+    const existing = avatarCacheRef.current.get(url)
+    if (existing) {
+      return existing.complete && existing.naturalWidth > 0 ? existing : null
+    }
+    const img = new Image()
+    img.onload = () => setImgLoadedTick((t) => t + 1)
+    img.src = url
+    avatarCacheRef.current.set(url, img)
+    return null
+  }
 
   // High-performance requestAnimationFrame Canvas render loop
   useEffect(() => {
@@ -311,32 +360,55 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
               ctx.strokeRect(ex + ew * 0.18, ey + eh * 0.25, ew * 0.64, eh * 0.5)
             } else {
               const r = Math.min(ew, eh) * 0.4
-              if (ent.kind === 'enemy') {
+              const isEntTurn = Boolean(activeCombatantID && ent.id === activeCombatantID)
+              if (isEntTurn) {
                 ctx.beginPath()
-                for (let k = 0; k < 8; k++) {
-                  const a = (k * Math.PI) / 4 + Math.PI / 8
-                  const vx = ecx + Math.cos(a) * r
-                  const vy = ecy + Math.sin(a) * r
-                  if (k === 0) ctx.moveTo(vx, vy)
-                  else ctx.lineTo(vx, vy)
-                }
-                ctx.closePath()
-              } else {
+                ctx.arc(ecx, ecy, r * 1.25, 0, Math.PI * 2)
+                ctx.strokeStyle = '#fbbf24'
+                ctx.lineWidth = Math.max(2.5, 3.5 / zoom)
+                ctx.stroke()
+              }
+              const entAvatar = getCachedAvatar(ent.avatar_url)
+              if (entAvatar) {
+                ctx.save()
                 ctx.beginPath()
                 ctx.arc(ecx, ecy, r, 0, Math.PI * 2)
-              }
-              ctx.fillStyle = ent.color_hex || (ent.kind === 'enemy' ? '#dc2626' : '#3b82f6')
-              ctx.fill()
-              ctx.strokeStyle = isSelectedEnt ? '#ffffff' : '#090712'
-              ctx.lineWidth = isSelectedEnt ? 3 : 2
-              ctx.stroke()
+                ctx.clip()
+                ctx.drawImage(entAvatar, ecx - r, ecy - r, r * 2, r * 2)
+                ctx.restore()
+                ctx.beginPath()
+                ctx.arc(ecx, ecy, r, 0, Math.PI * 2)
+                ctx.strokeStyle = isSelectedEnt ? '#ffffff' : isEntTurn ? '#fbbf24' : ent.color_hex || '#dc2626'
+                ctx.lineWidth = isSelectedEnt ? 3 : 2
+                ctx.stroke()
+              } else {
+                if (ent.kind === 'enemy') {
+                  ctx.beginPath()
+                  for (let k = 0; k < 8; k++) {
+                    const a = (k * Math.PI) / 4 + Math.PI / 8
+                    const vx = ecx + Math.cos(a) * r
+                    const vy = ecy + Math.sin(a) * r
+                    if (k === 0) ctx.moveTo(vx, vy)
+                    else ctx.lineTo(vx, vy)
+                  }
+                  ctx.closePath()
+                } else {
+                  ctx.beginPath()
+                  ctx.arc(ecx, ecy, r, 0, Math.PI * 2)
+                }
+                ctx.fillStyle = ent.color_hex || (ent.kind === 'enemy' ? '#dc2626' : '#3b82f6')
+                ctx.fill()
+                ctx.strokeStyle = isSelectedEnt ? '#ffffff' : '#090712'
+                ctx.lineWidth = isSelectedEnt ? 3 : 2
+                ctx.stroke()
 
-              const tag = ent.name.slice(0, 2).toUpperCase()
-              ctx.fillStyle = '#ffffff'
-              ctx.font = `800 ${Math.max(10, r * 0.72)}px sans-serif`
-              ctx.textAlign = 'center'
-              ctx.textBaseline = 'middle'
-              ctx.fillText(tag, ecx, ecy)
+                const tag = ent.name.slice(0, 2).toUpperCase()
+                ctx.fillStyle = '#ffffff'
+                ctx.font = `800 ${Math.max(10, r * 0.72)}px sans-serif`
+                ctx.textAlign = 'center'
+                ctx.textBaseline = 'middle'
+                ctx.fillText(tag, ecx, ecy)
+              }
             }
 
             if (isSelectedEnt) {
@@ -412,7 +484,7 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
             ctx.save()
             if (p.token_hidden) ctx.globalAlpha = 0.45
 
-            if (p.id === activePlayerID) {
+            if (p.id === (activeCombatantID || activePlayerID)) {
               ctx.beginPath()
               ctx.arc(cx, cy, radius * 1.28, 0, Math.PI * 2)
               ctx.strokeStyle = '#fbbf24'
@@ -431,24 +503,39 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
               ctx.stroke()
             }
 
-            ctx.beginPath()
-            ctx.arc(cx, cy, radius, 0, Math.PI * 2)
-            ctx.fillStyle = p.color_hex || '#a855f7'
-            ctx.fill()
-            ctx.strokeStyle = '#090712'
-            ctx.lineWidth = Math.max(1.2, 2 / zoom)
-            ctx.stroke()
+            const pAvatar = getCachedAvatar(p.avatar_url)
+            if (pAvatar) {
+              ctx.save()
+              ctx.beginPath()
+              ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+              ctx.clip()
+              ctx.drawImage(pAvatar, cx - radius, cy - radius, radius * 2, radius * 2)
+              ctx.restore()
+              ctx.beginPath()
+              ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+              ctx.strokeStyle = p.color_hex || '#a855f7'
+              ctx.lineWidth = Math.max(1.6, 2.4 / zoom)
+              ctx.stroke()
+            } else {
+              ctx.beginPath()
+              ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+              ctx.fillStyle = p.color_hex || '#a855f7'
+              ctx.fill()
+              ctx.strokeStyle = '#090712'
+              ctx.lineWidth = Math.max(1.2, 2 / zoom)
+              ctx.stroke()
 
-            const initials = p.name
-              .split(/\s+/)
-              .slice(0, 2)
-              .map((word) => word[0]?.toUpperCase() || '')
-              .join('')
-            ctx.fillStyle = '#ffffff'
-            ctx.font = `bold ${Math.max(8, radius * 0.9)}px sans-serif`
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'middle'
-            ctx.fillText(initials || '?', cx, cy)
+              const initials = p.name
+                .split(/\s+/)
+                .slice(0, 2)
+                .map((word) => word[0]?.toUpperCase() || '')
+                .join('')
+              ctx.fillStyle = '#ffffff'
+              ctx.font = `bold ${Math.max(8, radius * 0.9)}px sans-serif`
+              ctx.textAlign = 'center'
+              ctx.textBaseline = 'middle'
+              ctx.fillText(initials || '?', cx, cy)
+            }
 
             // Player Condition badges (top right rim)
             if (p.conditions && p.conditions.length > 0) {
@@ -493,48 +580,18 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
               })
               ctx.stroke()
             } else if (ev.kind === 'aoe' && typeof ev.origin_x === 'number' && typeof ev.origin_y === 'number') {
-              const ox = (ev.origin_x + 0.5) * cellSize
-              const oy = (ev.origin_y + 0.5) * cellSize
-              const radCells = Math.max(1, (ev.radius_ft || 20) / 5)
-              const rPx = radCells * cellSize
-              ctx.save()
-              ctx.fillStyle = `${ev.color || '#f97316'}40`
-              ctx.strokeStyle = ev.color || '#f97316'
-              ctx.lineWidth = 2.5
-              if (ev.shape === 'cube') {
-                ctx.fillRect(ox - rPx / 2, oy - rPx / 2, rPx, rPx)
-                ctx.strokeRect(ox - rPx / 2, oy - rPx / 2, rPx, rPx)
-              } else if (ev.shape === 'cone') {
-                const tx = ((ev.target_x ?? ev.origin_x + 1) + 0.5) * cellSize
-                const ty = ((ev.target_y ?? ev.origin_y) + 0.5) * cellSize
-                const ang = Math.atan2(ty - oy, tx - ox)
-                ctx.beginPath()
-                ctx.moveTo(ox, oy)
-                ctx.arc(ox, oy, rPx, ang - Math.PI / 6, ang + Math.PI / 6)
-                ctx.closePath()
-                ctx.fill()
-                ctx.stroke()
-              } else if (ev.shape === 'line') {
-                const tx = ((ev.target_x ?? ev.origin_x + 3) + 0.5) * cellSize
-                const ty = ((ev.target_y ?? ev.origin_y) + 0.5) * cellSize
-                ctx.lineWidth = cellSize * 0.75
-                ctx.strokeStyle = `${ev.color || '#38bdf8'}55`
-                ctx.beginPath()
-                ctx.moveTo(ox, oy)
-                ctx.lineTo(tx, ty)
-                ctx.stroke()
-              } else {
-                // Sphere / Radius
-                ctx.beginPath()
-                ctx.arc(ox, oy, rPx, 0, Math.PI * 2)
-                ctx.fill()
-                ctx.stroke()
-              }
-              ctx.fillStyle = '#fef3c7'
-              ctx.font = 'bold 11px sans-serif'
-              ctx.textAlign = 'center'
-              ctx.fillText(`${ev.shape?.toUpperCase() || 'AOE'} ${ev.radius_ft || 20}ft`, ox, oy - 6)
-              ctx.restore()
+              drawAoEOverlay(
+                ctx,
+                ev.shape || 'sphere',
+                ev.origin_x,
+                ev.origin_y,
+                ev.target_x ?? ev.origin_x + 2,
+                ev.target_y ?? ev.origin_y,
+                ev.radius_ft || 20,
+                ev.color || '#f97316',
+                cellSize,
+                false
+              )
             } else if (
               ev.kind === 'ruler' &&
               typeof ev.from_x === 'number' &&
@@ -567,6 +624,22 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
                 ctx.restore()
               }
             }
+          }
+
+          // Active local AoE live directional preview (follows mouse/pointer after origin click)
+          if (tool === 'aoe' && aoeOrigin && aoeTarget) {
+            drawAoEOverlay(
+              ctx,
+              aoeShape,
+              aoeOrigin.x,
+              aoeOrigin.y,
+              aoeTarget.x,
+              aoeTarget.y,
+              aoeRadiusFt,
+              '#fb923c',
+              cellSize,
+              true
+            )
           }
 
           // Active local ruler preview while dragging
@@ -617,6 +690,10 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
     rulerStart,
     rulerEnd,
     drawStroke,
+    aoeOrigin,
+    aoeTarget,
+    aoeShape,
+    aoeRadiusFt,
   ])
 
   const screenToBoard = (clientX: number, clientY: number) => {
@@ -683,8 +760,20 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
     const cell = screenToGrid(e.clientX, e.clientY)
     const boardPt = screenToBoard(e.clientX, e.clientY)
     setHoverCell(cell)
+
+    if (tool === 'aoe' && aoeOrigin && boardPt) {
+      setAoeTarget({
+        x: boardPt.x / LOGICAL_CELL_SIZE - 0.5,
+        y: boardPt.y / LOGICAL_CELL_SIZE - 0.5,
+      })
+      if (!dragRef.current.active) return
+    }
+
     if (!dragRef.current.active) return
 
+    if (tool === 'aoe' && aoeOrigin) {
+      return
+    }
     if (tool === 'ruler') {
       if (cell) setRulerEnd(cell)
       return
@@ -761,18 +850,39 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
         return
       }
       if (tool === 'aoe') {
-        onTempEvent?.({
-          kind: 'aoe',
-          shape: aoeShape,
-          origin_x: cell.x,
-          origin_y: cell.y,
-          target_x: cell.x + 2,
-          target_y: cell.y,
-          radius_ft: aoeRadiusFt,
-          color: '#f97316',
-          sender_name: localPlayerName,
-        })
+        const boardPt = screenToBoard(e.clientX, e.clientY)
+        if (!aoeOrigin) {
+          setAoeOrigin({ x: cell.x, y: cell.y })
+          setAoeTarget({ x: cell.x + 2, y: cell.y })
+        } else {
+          const tx = boardPt ? boardPt.x / LOGICAL_CELL_SIZE - 0.5 : (aoeTarget?.x ?? cell.x)
+          const ty = boardPt ? boardPt.y / LOGICAL_CELL_SIZE - 0.5 : (aoeTarget?.y ?? cell.y)
+          onTempEvent?.({
+            kind: 'aoe',
+            shape: aoeShape,
+            origin_x: aoeOrigin.x,
+            origin_y: aoeOrigin.y,
+            target_x: tx,
+            target_y: ty,
+            radius_ft: aoeRadiusFt,
+            color: '#f97316',
+            sender_name: localPlayerName,
+          })
+          setAoeOrigin(null)
+          setAoeTarget(null)
+        }
         return
+      }
+      if (onEntityClick) {
+        const hitEnt = entities.find((ent) => {
+          if (ent.is_hidden && !isDM) return false
+          const sz = Math.max(1, Math.min(4, ent.size || 1))
+          return cell.x >= ent.x && cell.x < ent.x + sz && cell.y >= ent.y && cell.y < ent.y + sz
+        })
+        if (hitEnt && (!isDM || tool === 'move')) {
+          onEntityClick(hitEnt)
+          if (!isDM) return
+        }
       }
       if (onCellClick) {
         onCellClick(cell.x, cell.y)
@@ -799,6 +909,304 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
       }))
       return nextZoom
     })
+  }
+
+  const radialToolItems: {
+    id: string
+    label: string
+    icon: React.ReactNode
+    active?: boolean
+    colorClass: string
+    onClick: () => void
+  }[] = [
+    {
+      id: 'move',
+      label: 'Mover',
+      icon: <Hand className="w-4 h-4" />,
+      active: tool === 'move',
+      colorClass: tool === 'move' ? 'bg-violet-600 border-violet-300 text-white' : 'bg-[#120d22]/95 border-violet-500/40 text-slate-200',
+      onClick: () => {
+        setTool('move')
+        setToolsRadialOpen(false)
+      },
+    },
+    {
+      id: 'ruler',
+      label: 'Regla 5ft',
+      icon: <Ruler className="w-4 h-4" />,
+      active: tool === 'ruler',
+      colorClass: tool === 'ruler' ? 'bg-sky-500 border-sky-200 text-slate-950' : 'bg-[#120d22]/95 border-sky-500/40 text-sky-200',
+      onClick: () => {
+        setTool('ruler')
+        setToolsRadialOpen(false)
+      },
+    },
+    {
+      id: 'aoe',
+      label: 'AoE',
+      icon: <Flame className="w-4 h-4" />,
+      active: tool === 'aoe',
+      colorClass: tool === 'aoe' ? 'bg-orange-500 border-orange-200 text-slate-950' : 'bg-[#120d22]/95 border-orange-500/40 text-orange-200',
+      onClick: () => {
+        setTool('aoe')
+        setToolsRadialOpen(false)
+      },
+    },
+    {
+      id: 'ping',
+      label: 'Ping',
+      icon: <Radio className="w-4 h-4" />,
+      active: tool === 'ping',
+      colorClass: tool === 'ping' ? 'bg-amber-400 border-amber-100 text-slate-950' : 'bg-[#120d22]/95 border-amber-500/40 text-amber-200',
+      onClick: () => {
+        setTool('ping')
+        setToolsRadialOpen(false)
+      },
+    },
+    {
+      id: 'draw',
+      label: 'Dibujar',
+      icon: <Pencil className="w-4 h-4" />,
+      active: tool === 'draw',
+      colorClass: tool === 'draw' ? 'bg-cyan-500 border-cyan-200 text-slate-950' : 'bg-[#120d22]/95 border-cyan-500/40 text-cyan-200',
+      onClick: () => {
+        setTool('draw')
+        setToolsRadialOpen(false)
+      },
+    },
+    {
+      id: 'center',
+      label: 'Centrar',
+      icon: <Maximize2 className="w-4 h-4" />,
+      colorClass: 'bg-[#120d22]/95 border-violet-500/40 text-slate-200',
+      onClick: () => {
+        fitToContainer()
+        setToolsRadialOpen(false)
+      },
+    },
+  ]
+  if (onTempEvent && tempEvents.length > 0) {
+    radialToolItems.push({
+      id: 'clear',
+      label: 'Limpiar',
+      icon: <Eraser className="w-4 h-4" />,
+      colorClass: 'bg-rose-950/90 border-rose-500/50 text-rose-200',
+      onClick: () => {
+        onTempEvent({ kind: 'draw', clear: true })
+        onTempEvent({ kind: 'aoe', clear: true })
+        setToolsRadialOpen(false)
+      },
+    })
+  }
+
+  const aoeBanner = tool === 'aoe' && (
+    <div className="flex flex-wrap items-center gap-1.5 bg-[#090712]/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-orange-500/40 text-xs shadow-xl">
+      <span className="text-orange-300 font-bold">AoE:</span>
+      {(['cone', 'sphere', 'cube', 'line'] as const).map((sh) => (
+        <button
+          key={sh}
+          type="button"
+          onClick={() => setAoeShape(sh)}
+          className={`px-2 py-0.5 rounded font-semibold ${
+            aoeShape === sh ? 'bg-orange-500 text-slate-950' : 'bg-[#120d22] text-slate-300'
+          }`}
+        >
+          {sh === 'sphere' ? 'Esfera' : sh === 'cone' ? 'Cono' : sh === 'cube' ? 'Cubo' : 'Línea'}
+        </button>
+      ))}
+      <select
+        value={aoeRadiusFt}
+        onChange={(e) => setAoeRadiusFt(Number(e.target.value))}
+        className="px-2 py-0.5 rounded bg-[#120d22] border border-orange-500/30 text-amber-200 font-mono"
+      >
+        {[10, 15, 20, 30, 40, 60].map((ft) => (
+          <option key={ft} value={ft}>
+            {ft} ft
+          </option>
+        ))}
+      </select>
+      <span className="text-[11px] text-amber-200">
+        {aoeOrigin
+          ? 'Mueve el cursor/dedo y haz 2º clic para fijar dirección'
+          : '1º clic en el mapa para fijar origen'}
+      </span>
+      {aoeOrigin && (
+        <button
+          type="button"
+          onClick={() => {
+            setAoeOrigin(null)
+            setAoeTarget(null)
+          }}
+          className="px-2 py-0.5 rounded bg-rose-600/30 text-rose-200 font-bold"
+        >
+          Cancelar
+        </button>
+      )}
+    </div>
+  )
+
+  const canvasEl = (
+    <canvas
+      ref={canvasRef}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={() => {
+        setHoverCell(null)
+        dragRef.current.active = false
+      }}
+      onWheel={handleWheel}
+      className="w-full h-full block"
+    />
+  )
+
+  if (fullViewport) {
+    if (isDesktop) {
+      return (
+        <div className="relative w-full h-full flex flex-col overflow-hidden">
+          <div className="shrink-0 h-10 z-20 flex items-center justify-between gap-2 px-2.5 border-b border-violet-500/20 bg-[#0e091b]/90 backdrop-blur-md text-xs overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1.5">
+              {radialToolItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={item.onClick}
+                  title={item.label}
+                  className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 border shrink-0 transition ${item.colorClass}`}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5 text-slate-400 shrink-0">
+              <span className="font-mono text-[11px] mr-1">
+                <strong className="text-amber-200">{cols}×{rows}</strong>
+                {hoverCell && ` (${hoverCell.x + 1},${hoverCell.y + 1})`}
+              </span>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.max(0.15, z * 0.85))}
+                className="p-1.5 rounded-lg bg-[#090712] border border-violet-500/30 text-slate-200"
+                title="Alejar"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(4, z * 1.18))}
+                className="p-1.5 rounded-lg bg-[#090712] border border-violet-500/30 text-slate-200"
+                title="Acercar"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          <div
+            ref={containerRef}
+            className="relative flex-1 min-h-0 overflow-hidden bg-[#07050f] touch-none select-none cursor-crosshair"
+          >
+            {canvasEl}
+          </div>
+          {aoeBanner && (
+            <div className="absolute bottom-20 left-3 z-20 max-w-[calc(100vw-2rem)]">
+              {aoeBanner}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    const innerToolsCount = Math.min(4, radialToolItems.length)
+    return (
+      <div className="relative w-full h-full overflow-hidden">
+        <div
+          ref={containerRef}
+          className="relative w-full h-full overflow-hidden bg-[#07050f] touch-none select-none cursor-crosshair"
+        >
+          {canvasEl}
+        </div>
+
+        {/* Floating AoE Directional Controls */}
+        {aoeBanner && (
+          <div className="absolute bottom-20 left-4 z-20 max-w-[calc(100vw-2rem)]">
+            {aoeBanner}
+          </div>
+        )}
+
+        {/* Bottom-Left Radial Measurement & Map Tools Menu */}
+        <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1.5">
+          {toolsRadialOpen && (
+            <div className="fixed inset-0 z-[-1]" onClick={() => setToolsRadialOpen(false)} />
+          )}
+
+          {toolsRadialOpen &&
+            radialToolItems.map((item, idx) => {
+              const isOuter = idx >= innerToolsCount
+              const ringIdx = isOuter ? idx - innerToolsCount : idx
+              const ringTotal = isOuter ? radialToolItems.length - innerToolsCount : innerToolsCount
+              const radius = isOuter ? 152 : 90
+              // Up-and-right quadrant: from -86deg (up) to -6deg (right)
+              const startDeg = -86
+              const endDeg = -6
+              const deg =
+                ringTotal <= 1
+                  ? (startDeg + endDeg) / 2
+                  : startDeg + ((endDeg - startDeg) * ringIdx) / (ringTotal - 1)
+              const rad = (deg * Math.PI) / 180
+              const tx = Math.cos(rad) * radius
+              const ty = Math.sin(rad) * radius
+
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={item.onClick}
+                  style={{ transform: `translate(${tx}px, ${ty}px)` }}
+                  className={`absolute bottom-1 left-1 z-30 flex flex-col items-center justify-center w-14 h-14 rounded-full border-2 shadow-xl shadow-black/80 backdrop-blur-md transition-transform hover:scale-110 active:scale-95 ${item.colorClass}`}
+                >
+                  {item.icon}
+                  <span className="mt-0.5 text-[9px] font-extrabold leading-none">{item.label}</span>
+                </button>
+              )
+            })}
+
+          <button
+            type="button"
+            onClick={() => setToolsRadialOpen((v) => !v)}
+            className={`h-12 px-3.5 rounded-full border-2 font-extrabold text-xs flex items-center gap-1.5 shadow-2xl shadow-black/80 transition ${
+              toolsRadialOpen
+                ? 'bg-sky-400 text-slate-950 border-white scale-105'
+                : tool !== 'move'
+                  ? 'bg-orange-500 text-slate-950 border-amber-200'
+                  : 'bg-[#120d22]/95 text-sky-200 border-sky-400/50 hover:border-sky-300'
+            }`}
+          >
+            <Ruler className="w-4 h-4 shrink-0" />
+            <span>{tool === 'move' ? 'Medidas' : tool.toUpperCase()}</span>
+          </button>
+
+          <div className="hidden sm:flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.max(0.15, z * 0.85))}
+              className="w-8 h-8 rounded-full bg-[#090712]/90 border border-violet-500/35 text-slate-200 flex items-center justify-center"
+              title="Alejar"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.min(4, z * 1.18))}
+              className="w-8 h-8 rounded-full bg-[#090712]/90 border border-violet-500/35 text-slate-200 flex items-center justify-center"
+              title="Acercar"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -944,35 +1352,7 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
       </div>
 
       {/* AoE Controls when AoE tool active */}
-      {tool === 'aoe' && (
-        <div className="flex flex-wrap items-center gap-2 bg-[#090712]/80 px-3 py-2 rounded-xl border border-orange-500/30 text-xs">
-          <span className="text-orange-300 font-bold">Plantilla AoE:</span>
-          {(['sphere', 'cone', 'cube', 'line'] as const).map((sh) => (
-            <button
-              key={sh}
-              type="button"
-              onClick={() => setAoeShape(sh)}
-              className={`px-2 py-1 rounded font-semibold ${
-                aoeShape === sh ? 'bg-orange-500 text-slate-950' : 'bg-[#120d22] text-slate-300'
-              }`}
-            >
-              {sh === 'sphere' ? 'Esfera' : sh === 'cone' ? 'Cono' : sh === 'cube' ? 'Cubo' : 'Línea'}
-            </button>
-          ))}
-          <select
-            value={aoeRadiusFt}
-            onChange={(e) => setAoeRadiusFt(Number(e.target.value))}
-            className="px-2 py-1 rounded bg-[#120d22] border border-orange-500/30 text-amber-200 font-mono"
-          >
-            {[10, 15, 20, 30, 40, 60].map((ft) => (
-              <option key={ft} value={ft}>
-                {ft} pies ({ft / 5} cas.)
-              </option>
-            ))}
-          </select>
-          <span className="text-[11px] text-slate-400">Haz clic en la casilla de origen en el mapa.</span>
-        </div>
-      )}
+      {aoeBanner}
 
       {/* Fog Controls for DM */}
       {isDM && onUpdateFog && (
@@ -1079,5 +1459,86 @@ function drawRulerLine(
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillText(txt, mx, my - 1)
+  ctx.restore()
+}
+
+function drawAoEOverlay(
+  ctx: CanvasRenderingContext2D,
+  shape: string,
+  originX: number,
+  originY: number,
+  targetX: number,
+  targetY: number,
+  radiusFt: number,
+  color: string,
+  cellSize: number,
+  isPreview: boolean
+) {
+  const ox = (originX + 0.5) * cellSize
+  const oy = (originY + 0.5) * cellSize
+  const tx = (targetX + 0.5) * cellSize
+  const ty = (targetY + 0.5) * cellSize
+  const radCells = Math.max(1, (radiusFt || 20) / 5)
+  const rPx = radCells * cellSize
+  const ang = Math.atan2(ty - oy, tx - ox)
+
+  ctx.save()
+  ctx.fillStyle = `${color}${isPreview ? '55' : '40'}`
+  ctx.strokeStyle = color
+  ctx.lineWidth = isPreview ? 3 : 2.5
+  if (isPreview) {
+    ctx.setLineDash([7, 5])
+  }
+
+  if (shape === 'cube') {
+    ctx.save()
+    ctx.translate(ox, oy)
+    ctx.rotate(ang)
+    ctx.fillRect(0, -rPx / 2, rPx, rPx)
+    ctx.strokeRect(0, -rPx / 2, rPx, rPx)
+    ctx.restore()
+  } else if (shape === 'cone') {
+    ctx.beginPath()
+    ctx.moveTo(ox, oy)
+    ctx.arc(ox, oy, rPx, ang - Math.PI / 6, ang + Math.PI / 6)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  } else if (shape === 'line') {
+    ctx.save()
+    ctx.translate(ox, oy)
+    ctx.rotate(ang)
+    ctx.fillRect(0, -cellSize * 0.45, rPx, cellSize * 0.9)
+    ctx.strokeRect(0, -cellSize * 0.45, rPx, cellSize * 0.9)
+    ctx.restore()
+  } else {
+    ctx.beginPath()
+    ctx.arc(ox, oy, rPx, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  // Direction indicator arrow for directional templates & preview
+  if (shape === 'cone' || shape === 'line' || shape === 'cube') {
+    ctx.setLineDash([])
+    const ex = ox + Math.cos(ang) * Math.min(rPx, cellSize * 2.5)
+    const ey = oy + Math.sin(ang) * Math.min(rPx, cellSize * 2.5)
+    ctx.beginPath()
+    ctx.moveTo(ox, oy)
+    ctx.lineTo(ex, ey)
+    ctx.strokeStyle = '#fef08a'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(ox, oy, 5, 0, Math.PI * 2)
+    ctx.fillStyle = '#fef08a'
+    ctx.fill()
+  }
+
+  ctx.setLineDash([])
+  ctx.fillStyle = '#fef3c7'
+  ctx.font = 'bold 11px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.fillText(`${shape.toUpperCase()} ${radiusFt}ft${isPreview ? ' (Preview)' : ''}`, ox, oy - 10)
   ctx.restore()
 }
