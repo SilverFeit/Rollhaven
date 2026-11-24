@@ -15,6 +15,7 @@ import {
 } from '../lib/characterRules'
 
 interface PlayerQuickHotbarProps {
+  variant?: 'bar' | 'radial'
   player: Player
   character?: CharacterRecord
   isMyTurn: boolean
@@ -46,6 +47,7 @@ interface RadialActionItem {
 }
 
 export const PlayerQuickHotbar: React.FC<PlayerQuickHotbarProps> = ({
+  variant = 'radial',
   player,
   character,
   isMyTurn,
@@ -176,20 +178,108 @@ export const PlayerQuickHotbar: React.FC<PlayerQuickHotbarProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [slots, disabled])
 
-  const slotIcon = (kind: HotbarSlot['kind']) => {
+  const slotIcon = (kind: HotbarSlot['kind'], sizeClass = 'w-4 h-4') => {
     switch (kind) {
       case 'initiative':
-        return <Zap className="w-4 h-4 text-amber-300" />
+        return <Zap className={`${sizeClass} text-amber-300`} />
       case 'weapon_attack':
       case 'weapon_damage':
-        return <Swords className="w-4 h-4 text-rose-300" />
+        return <Swords className={`${sizeClass} text-rose-300`} />
       case 'spell':
-        return <Flame className="w-4 h-4 text-orange-300" />
+        return <Flame className={`${sizeClass} text-orange-300`} />
       case 'save':
-        return <Shield className="w-4 h-4 text-sky-300" />
+        return <Shield className={`${sizeClass} text-sky-300`} />
       default:
-        return <Dices className="w-4 h-4 text-violet-300" />
+        return <Dices className={`${sizeClass} text-violet-300`} />
     }
+  }
+
+  if (variant === 'bar') {
+    return (
+      <div className="pointer-events-auto flex items-center gap-2 max-w-[calc(100vw-2rem)] rounded-2xl border border-violet-500/40 bg-[#090712]/90 backdrop-blur-xl px-2.5 py-1.5 shadow-2xl shadow-black/80">
+        {/* Numbered Quick Action Slots */}
+        <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto no-scrollbar">
+          {slots.map((slot, index) => (
+            <button
+              key={slot.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => executeSlot(slot)}
+              title={`Tecla ${index + 1}: ${slot.label}`}
+              className={`group flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold shrink-0 transition disabled:opacity-40 ${
+                slot.kind === 'initiative'
+                  ? 'bg-amber-500/15 hover:bg-amber-500/30 border-amber-400/45 text-amber-200'
+                  : slot.kind === 'weapon_attack'
+                    ? 'bg-rose-500/15 hover:bg-rose-500/30 border-rose-400/45 text-rose-100'
+                    : 'bg-[#120d22] hover:bg-violet-600/35 border-violet-500/30 text-slate-100'
+              }`}
+            >
+              <span className="text-[10px] font-mono px-1 rounded bg-black/50 text-slate-400 group-hover:text-white">
+                {index + 1}
+              </span>
+              {slotIcon(slot.kind, 'w-3.5 h-3.5')}
+              <span className="max-w-[130px] truncate">{slot.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Utility Toggles & End Turn */}
+        <div className="flex items-center gap-1.5 pl-2 border-l border-violet-500/25 shrink-0">
+          <button
+            type="button"
+            onClick={onToggleSheet}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 border transition ${
+              sheetOpen
+                ? 'bg-amber-500 text-slate-950 border-amber-300'
+                : 'bg-[#120d22] text-amber-200 border-amber-500/30 hover:bg-amber-500/15'
+            }`}
+            title="Abrir Mi Hoja"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Hoja</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleDecisions}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 border transition ${
+              decisionsOpen
+                ? 'bg-violet-600 text-white border-violet-400'
+                : 'bg-[#120d22] text-slate-200 border-violet-500/30 hover:bg-violet-600/25'
+            }`}
+            title="Abrir 5 Sets de Decisión"
+          >
+            <Dices className="w-3.5 h-3.5" />
+            <span>5 Sets</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleTracker}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 border transition ${
+              trackerOpen
+                ? 'bg-violet-600 text-white border-violet-400'
+                : 'bg-[#120d22] text-slate-200 border-violet-500/30 hover:bg-violet-600/25'
+            }`}
+            title="Mostrar/ocultar Tracker de Tiradas & Chat"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Chat</span>
+          </button>
+
+          {isMyTurn && (
+            <button
+              type="button"
+              onClick={onEndTurn}
+              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 text-xs font-extrabold flex items-center gap-1 shadow-lg shadow-amber-900/40"
+            >
+              <ArrowRightCircle className="w-3.5 h-3.5" />
+              <span>Pasar Turno</span>
+            </button>
+          )}
+        </div>
+      </div>
+    )
   }
 
   const radialItems: RadialActionItem[] = [

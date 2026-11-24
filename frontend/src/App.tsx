@@ -24,6 +24,7 @@ import { CharacterWizard } from './components/CharacterWizard'
 import { InteractiveCharacterSheet } from './components/InteractiveCharacterSheet'
 import { ActionChatTracker } from './components/ActionChatTracker'
 import { PlayerQuickHotbar } from './components/PlayerQuickHotbar'
+import { useIsDesktop } from './lib/useMediaQuery'
 
 type DrawerKind = null | 'SHEET' | 'DECISIONS' | 'COMPANION' | 'INVENTORY' | 'NOTES' | 'RACE'
 
@@ -47,6 +48,7 @@ const PlayerWorkspace: React.FC = () => {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [trackerOpen, setTrackerOpen] = useState<boolean>(() => window.innerWidth >= 1024)
   const [focusTarget, setFocusTarget] = useState<{ x: number; y: number; tick: number } | null>(null)
+  const isDesktop = useIsDesktop()
 
   const currentPlayer = snapshot?.players.find((p) => p.id === playerID)
   const assignedCharacter = snapshot?.characters?.find((c) => c.id === currentPlayer?.character_id)
@@ -186,7 +188,7 @@ const PlayerWorkspace: React.FC = () => {
       </header>
 
       {/* Map-First Main Stage */}
-      <main className="relative flex-1 overflow-hidden">
+      <main className="relative flex-1 min-h-0 overflow-hidden">
         <TacticalMapCanvas
           fullViewport
           session={snapshot.session}
@@ -204,7 +206,7 @@ const PlayerWorkspace: React.FC = () => {
         />
 
         {/* Top Overlaid Initiative Portrait Tracker */}
-        <div className="pointer-events-none absolute top-2.5 inset-x-0 z-20 flex flex-col items-center gap-2 px-3">
+        <div className="pointer-events-none absolute top-2.5 md:top-12 inset-x-0 z-20 flex flex-col items-center gap-2 px-3">
           <InitiativeOverlayTracker
             combatants={snapshot.combatants}
             players={snapshot.players}
@@ -248,7 +250,7 @@ const PlayerWorkspace: React.FC = () => {
 
         {/* Floating Right Action Chat & Interactive Roll Tracker */}
         {trackerOpen && (
-          <aside className="absolute top-14 sm:top-3 bottom-20 right-2 sm:right-3 z-20 w-[calc(100vw-1rem)] sm:w-80 rounded-2xl border border-violet-500/35 bg-[#120d22]/90 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
+          <aside className="absolute top-14 sm:top-3 md:top-12 bottom-20 right-2 sm:right-3 z-20 w-[calc(100vw-1rem)] sm:w-80 rounded-2xl border border-violet-500/35 bg-[#120d22]/90 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
             <div className="px-3.5 py-2 border-b border-violet-500/20 bg-[#090712]/80 flex items-center justify-between">
               <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-200">
                 Tracker de Tiradas &amp; Chat
@@ -277,7 +279,7 @@ const PlayerWorkspace: React.FC = () => {
 
         {/* Floating Slide-Over Drawer for Character Sheet / Decisions / Chat / Inventory / Notes */}
         {drawer && (
-          <aside className="absolute top-2 bottom-20 left-2 sm:left-3 z-30 w-[calc(100vw-1rem)] sm:w-[440px] max-w-full rounded-2xl border border-violet-500/35 bg-[#120d22]/95 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
+          <aside className="absolute top-2 md:top-12 bottom-20 left-2 sm:left-3 z-30 w-[calc(100vw-1rem)] sm:w-[440px] max-w-full rounded-2xl border border-violet-500/35 bg-[#120d22]/95 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
             <div className="px-4 py-2.5 border-b border-violet-500/20 bg-[#090712]/80 flex items-center justify-between">
               <span className="text-xs font-extrabold uppercase tracking-wider text-amber-200">
                 {drawer === 'SHEET'
@@ -367,28 +369,54 @@ const PlayerWorkspace: React.FC = () => {
           </aside>
         )}
 
-        {/* Bottom-Right Radial Player Quick Action Menu */}
-        <div className="pointer-events-none absolute bottom-4 right-4 z-30 flex items-center justify-end">
-          <PlayerQuickHotbar
-            player={currentPlayer}
-            character={assignedCharacter}
-            isMyTurn={
-              Boolean(playerID) &&
-              (snapshot.active_combatant_id
-                ? snapshot.active_combatant_id === playerID
-                : snapshot.active_player_id === playerID)
-            }
-            disabled={isDisabled}
-            sheetOpen={drawer === 'SHEET'}
-            trackerOpen={trackerOpen}
-            decisionsOpen={drawer === 'DECISIONS'}
-            onRollAction={(payload) => sendMessage('ROLL_ACTION', { ...payload, visibility: 'PUBLIC' })}
-            onEndTurn={() => sendMessage('END_TURN', {})}
-            onToggleSheet={() => setDrawer((d) => (d === 'SHEET' ? null : 'SHEET'))}
-            onToggleTracker={() => setTrackerOpen((v) => !v)}
-            onToggleDecisions={() => setDrawer((d) => (d === 'DECISIONS' ? null : 'DECISIONS'))}
-          />
-        </div>
+        {/* Player Quick Action Hotbar: horizontal bar on PC desktop, radial menu on mobile */}
+        {isDesktop ? (
+          <div className="pointer-events-none absolute bottom-3 inset-x-0 z-30 flex justify-center px-3">
+            <PlayerQuickHotbar
+              variant="bar"
+              player={currentPlayer}
+              character={assignedCharacter}
+              isMyTurn={
+                Boolean(playerID) &&
+                (snapshot.active_combatant_id
+                  ? snapshot.active_combatant_id === playerID
+                  : snapshot.active_player_id === playerID)
+              }
+              disabled={isDisabled}
+              sheetOpen={drawer === 'SHEET'}
+              trackerOpen={trackerOpen}
+              decisionsOpen={drawer === 'DECISIONS'}
+              onRollAction={(payload) => sendMessage('ROLL_ACTION', { ...payload, visibility: 'PUBLIC' })}
+              onEndTurn={() => sendMessage('END_TURN', {})}
+              onToggleSheet={() => setDrawer((d) => (d === 'SHEET' ? null : 'SHEET'))}
+              onToggleTracker={() => setTrackerOpen((v) => !v)}
+              onToggleDecisions={() => setDrawer((d) => (d === 'DECISIONS' ? null : 'DECISIONS'))}
+            />
+          </div>
+        ) : (
+          <div className="pointer-events-none absolute bottom-4 right-4 z-30 flex items-center justify-end">
+            <PlayerQuickHotbar
+              variant="radial"
+              player={currentPlayer}
+              character={assignedCharacter}
+              isMyTurn={
+                Boolean(playerID) &&
+                (snapshot.active_combatant_id
+                  ? snapshot.active_combatant_id === playerID
+                  : snapshot.active_player_id === playerID)
+              }
+              disabled={isDisabled}
+              sheetOpen={drawer === 'SHEET'}
+              trackerOpen={trackerOpen}
+              decisionsOpen={drawer === 'DECISIONS'}
+              onRollAction={(payload) => sendMessage('ROLL_ACTION', { ...payload, visibility: 'PUBLIC' })}
+              onEndTurn={() => sendMessage('END_TURN', {})}
+              onToggleSheet={() => setDrawer((d) => (d === 'SHEET' ? null : 'SHEET'))}
+              onToggleTracker={() => setTrackerOpen((v) => !v)}
+              onToggleDecisions={() => setDrawer((d) => (d === 'DECISIONS' ? null : 'DECISIONS'))}
+            />
+          </div>
+        )}
       </main>
 
       <CharacterWizard
