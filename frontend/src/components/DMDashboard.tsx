@@ -50,6 +50,7 @@ import { CertificateModal } from './CertificateModal'
 import { CharacterWizard } from './CharacterWizard'
 import { CompanionHub } from './CompanionHub'
 import { DecisionSets } from './DecisionSets'
+import { InitiativeOverlayTracker } from './InitiativeOverlayTracker'
 import { RaceSVG } from './RaceIcons'
 import { DMSelection, TacticalMapCanvas } from './TacticalMapCanvas'
 import { TurnBanner } from './TurnBanner'
@@ -200,6 +201,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   const [mobDmgNotation, setMobDmgNotation] = useState('1d6+2')
   const [entityTacticalOpenID, setEntityTacticalOpenID] = useState<string | null>(null)
   const [wizardTarget, setWizardTarget] = useState<{ userID?: string; playerID?: string; name?: string } | null>(null)
+  const [dmFocusTarget, setDmFocusTarget] = useState<{ x: number; y: number; tick: number } | null>(null)
 
   useEffect(() => {
     fetch('/api/v1/dm/status')
@@ -2058,18 +2060,35 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
               </div>
             )}
 
-            <TacticalMapCanvas
-              session={snapshot.session}
-              players={snapshot.players}
-              entities={snapshot.map_entities ?? []}
-              tempEvents={tempEvents}
-              localPlayerID=""
-              activePlayerID={snapshot.active_player_id}
-              localPlayerName="Dungeon Master"
-              localColor="#f59e0b"
-              isDM
-              dmMode={dmMapMode}
-              selectedDMTarget={selectedTarget}
+            <div className="relative">
+              <div className="mb-2 flex justify-center">
+                <InitiativeOverlayTracker
+                  combatants={snapshot.combatants}
+                  players={snapshot.players}
+                  activeCombatantID={snapshot.active_combatant_id}
+                  activePlayerID={snapshot.active_player_id}
+                  localPlayerID=""
+                  roundNumber={snapshot.session.round_number ?? 1}
+                  isDM
+                  onSelectCombatant={(cb) => setDmFocusTarget({ x: cb.token_x, y: cb.token_y, tick: Date.now() })}
+                  onDMPrevTurn={() => sendDMOverride({ action: 'PREV_TURN' })}
+                  onDMNextTurn={() => sendDMOverride({ action: 'NEXT_TURN' })}
+                />
+              </div>
+              <TacticalMapCanvas
+                session={snapshot.session}
+                players={snapshot.players}
+                entities={snapshot.map_entities ?? []}
+                tempEvents={tempEvents}
+                localPlayerID=""
+                activePlayerID={snapshot.active_player_id}
+                activeCombatantID={snapshot.active_combatant_id}
+                localPlayerName="Dungeon Master"
+                localColor="#f59e0b"
+                isDM
+                dmMode={dmMapMode}
+                selectedDMTarget={selectedTarget}
+                focusTarget={dmFocusTarget}
               onMoveToken={(pid, x, y) =>
                 sendDMOverride({ action: 'MOVE_ANY_TOKEN', target_player_id: pid, target_x: x, target_y: y })
               }
@@ -2111,6 +2130,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                 }
               }}
             />
+            </div>
           </section>
         )}
       </main>

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,17 +46,38 @@ type RollBroadcast struct {
 	OutOfTurn     bool      `json:"out_of_turn,omitempty"`
 }
 
+// Combatant unifies players and initiative-tracked monsters into a single turn tracker list.
+type Combatant struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"` // "player" | "monster"
+	Name        string `json:"name"`
+	Initiative  int    `json:"initiative"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
+	RaceIcon    string `json:"race_icon,omitempty"`
+	ColorHex    string `json:"color_hex"`
+	HPCurrent   int    `json:"hp_current"`
+	HPMax       int    `json:"hp_max"`
+	TokenX      int    `json:"token_x"`
+	TokenY      int    `json:"token_y"`
+	IsHidden    bool   `json:"is_hidden"`
+	IsConnected bool   `json:"is_connected"`
+	MonsterSlug string `json:"monster_slug,omitempty"`
+	CharacterID string `json:"character_id,omitempty"`
+}
+
 // StateSnapshot is pushed via STATE_SYNC, filtered per recipient audience on the server.
 type StateSnapshot struct {
-	Sequence         int64                   `json:"sequence"`
-	Session          store.Session           `json:"session"`
-	ActiveCampaign   store.Campaign          `json:"active_campaign"`
-	Campaigns        []store.Campaign        `json:"campaigns"`
-	CampaignSessions []store.CampaignSession `json:"campaign_sessions"`
-	Users            []store.User            `json:"users"`
-	Characters       []store.Character       `json:"characters"`
-	Players          []store.Player          `json:"players"`
-	MapEntities      []store.MapEntity       `json:"map_entities"`
+	Sequence          int64                   `json:"sequence"`
+	Session           store.Session           `json:"session"`
+	ActiveCampaign    store.Campaign          `json:"active_campaign"`
+	Campaigns         []store.Campaign        `json:"campaigns"`
+	CampaignSessions  []store.CampaignSession `json:"campaign_sessions"`
+	Users             []store.User            `json:"users"`
+	Characters        []store.Character       `json:"characters"`
+	Players           []store.Player          `json:"players"`
+	Combatants        []Combatant             `json:"combatants"`
+	ActiveCombatantID string                  `json:"active_combatant_id"`
+	MapEntities       []store.MapEntity       `json:"map_entities"`
 	MapScenes        []store.MapScene        `json:"map_scenes"`
 	CampaignNotes    []store.CampaignNote    `json:"campaign_notes"`
 	ChatMessages     []store.ChatMessage     `json:"chat_messages"`
@@ -281,16 +303,27 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 		audits, _ = h.store.ListAuditEvents(activeCamp.ID, 50)
 	}
 
+	combatants := buildUnifiedCombatants(players, mapEntities)
 	turnIdx := sess.CurrentTurnIndex
-	if len(players) == 0 {
+	if len(combatants) == 0 {
 		turnIdx = 0
-	} else if turnIdx >= len(players) {
+	} else if turnIdx >= len(combatants) {
 		turnIdx = 0
 		_ = h.store.UpdateCurrentTurnIndex(0)
 	}
+	activeCombatantID := ""
 	activeID := ""
-	if len(players) > 0 && turnIdx >= 0 && turnIdx < len(players) {
-		activeID = players[turnIdx].ID
+	if len(combatants) > 0 && turnIdx >= 0 && turnIdx < len(combatants) {
+		activeCombatantID = combatants[turnIdx].ID
+		if combatants[turnIdx].Kind == "player" {
+			activeID = combatants[turnIdx].ID
+		}
+	}
+	if activeID == "" && len(players) > 0 {
+		pIdx := turnIdx % len(players)
+		if pIdx >= 0 && pIdx < len(players) {
+			activeID = players[pIdx].ID
+		}
 	}
 
 	h.mu.RLock()
@@ -315,15 +348,17 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 	}
 
 	return StateSnapshot{
-		Sequence:         seq,
-		Session:          sess,
-		ActiveCampaign:   activeCamp,
-		Campaigns:        campaigns,
-		CampaignSessions: campSessions,
-		Users:            users,
-		Characters:       characters,
-		Players:          players,
-		MapEntities:      mapEntities,
+		Sequence:          seq,
+		Session:           sess,
+		ActiveCampaign:    activeCamp,
+		Campaigns:         campaigns,
+		CampaignSessions:  campSessions,
+		Users:             users,
+		Characters:        characters,
+		Players:           players,
+		Combatants:        combatants,
+		ActiveCombatantID: activeCombatantID,
+		MapEntities:       mapEntities,
 		MapScenes:        mapScenes,
 		CampaignNotes:    notes,
 		ChatMessages:     chats,
@@ -1306,39 +1341,99 @@ func (h *Hub) handleRollTableExec(ctx context.Context, c *wsClient, fallbackID s
 	h.BroadcastStateSync()
 }
 
+func buildUnifiedCombatants(players []store.Player, entities []store.MapEntity) []Combatant {
+	hasMonsterInInit := false
+	for _, ent := range entities {
+		if ent.InInitiative {
+			hasMonsterInInit = true
+			break
+		}
+	}
+	out := make([]Combatant, 0, len(players)+len(entities))
+	for _, p := range players {
+		out = append(out, Combatant{
+			ID:          p.ID,
+			Kind:        "player",
+			Name:        p.Name,
+			Initiative:  p.Initiative,
+			AvatarURL:   p.AvatarURL,
+			RaceIcon:    p.RaceIcon,
+			ColorHex:    p.ColorHex,
+			TokenX:      p.TokenX,
+			TokenY:      p.TokenY,
+			IsHidden:    p.TokenHidden,
+			IsConnected: p.IsConnected,
+			CharacterID: p.CharacterID,
+		})
+	}
+	for _, ent := range entities {
+		if !ent.InInitiative {
+			continue
+		}
+		out = append(out, Combatant{
+			ID:          ent.ID,
+			Kind:        "monster",
+			Name:        ent.Name,
+			Initiative:  ent.Initiative,
+			AvatarURL:   ent.AvatarURL,
+			ColorHex:    ent.ColorHex,
+			HPCurrent:   ent.HPCurrent,
+			HPMax:       ent.HPMax,
+			TokenX:      ent.X,
+			TokenY:      ent.Y,
+			IsHidden:    ent.IsHidden,
+			IsConnected: true,
+			MonsterSlug: ent.MonsterSlug,
+		})
+	}
+	if hasMonsterInInit {
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].Initiative != out[j].Initiative {
+				return out[i].Initiative > out[j].Initiative
+			}
+			if out[i].Kind != out[j].Kind {
+				return out[i].Kind == "player"
+			}
+			return out[i].Name < out[j].Name
+		})
+	}
+	return out
+}
+
 func (h *Hub) handleEndTurn(ctx context.Context, c *wsClient, fallbackID string) {
 	clientPID, isDM := h.getClientIdentity(c)
 	snap, err := h.BuildSnapshotFor(clientPID, isDM)
-	if err != nil || len(snap.Players) == 0 {
+	if err != nil || len(snap.Combatants) == 0 {
 		return
 	}
 	pid := clientPID
 	if pid == "" {
 		pid = fallbackID
 	}
-	if !isDM && snap.ActivePlayerID != pid {
+	if !isDM && snap.ActiveCombatantID != pid && snap.ActivePlayerID != pid {
 		h.sendError(ctx, c, "Solo el jugador en turno actual puede pasar el turno")
 		return
 	}
 
-	nextIdx := engine.NextTurnIndex(snap.CurrentTurnIndex, len(snap.Players))
+	nextIdx := engine.NextTurnIndex(snap.CurrentTurnIndex, len(snap.Combatants))
 	if err := h.store.UpdateCurrentTurnIndex(nextIdx); err != nil {
 		h.sendError(ctx, c, err.Error())
 		return
 	}
-	if nextIdx == 0 && len(snap.Players) > 0 {
+	if nextIdx == 0 && len(snap.Combatants) > 0 {
 		_ = h.store.IncrementRound()
 	}
 
-	prevName := snap.Players[snap.CurrentTurnIndex].Name
-	nextName := snap.Players[nextIdx].Name
+	prevName := snap.Combatants[snap.CurrentTurnIndex].Name
+	prevID := snap.Combatants[snap.CurrentTurnIndex].ID
+	nextName := snap.Combatants[nextIdx].Name
 
 	h.mu.Lock()
 	h.currentTurnRolls = nil
 	h.mu.Unlock()
 
 	_, _ = h.store.AppendActionLog(
-		snap.Players[snap.CurrentTurnIndex].ID,
+		prevID,
 		prevName,
 		"TURN",
 		fmt.Sprintf("Pasó el turno → Ahora es el turno de %s", nextName),
@@ -1371,8 +1466,12 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 		EntityColor     string                 `json:"entity_color"`
 		EntityHPCurrent *int                   `json:"entity_hp_current"`
 		EntityHPMax     *int                   `json:"entity_hp_max"`
-		EntityNote      *string                `json:"entity_note"`
-		EntityHidden    *bool                  `json:"entity_hidden"`
+		EntityNote         *string                `json:"entity_note"`
+		EntityHidden       *bool                  `json:"entity_hidden"`
+		EntityInInitiative *bool                  `json:"entity_in_initiative"`
+		EntityInitiative   *int                   `json:"entity_initiative"`
+		EntityAvatarURL    *string                `json:"entity_avatar_url"`
+		EntityMonsterSlug  *string                `json:"entity_monster_slug"`
 		CampaignID      string                 `json:"campaign_id"`
 		CampaignName    string                 `json:"campaign_name"`
 		CampaignDesc    string                 `json:"campaign_desc"`
@@ -1451,8 +1550,8 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 
 	case "NEXT_TURN":
 		snap, err := h.BuildSnapshot()
-		if err == nil && len(snap.Players) > 0 {
-			nextIdx := engine.NextTurnIndex(snap.CurrentTurnIndex, len(snap.Players))
+		if err == nil && len(snap.Combatants) > 0 {
+			nextIdx := engine.NextTurnIndex(snap.CurrentTurnIndex, len(snap.Combatants))
 			_ = h.store.UpdateCurrentTurnIndex(nextIdx)
 			if nextIdx == 0 {
 				_ = h.store.IncrementRound()
@@ -1460,30 +1559,30 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 			h.mu.Lock()
 			h.currentTurnRolls = nil
 			h.mu.Unlock()
-			_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "TURN", fmt.Sprintf("Forzó avance de turno → %s", snap.Players[nextIdx].Name), nil)
+			_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "TURN", fmt.Sprintf("Forzó avance de turno → %s", snap.Combatants[nextIdx].Name), nil)
 		}
 
 	case "PREV_TURN":
 		snap, err := h.BuildSnapshot()
-		if err == nil && len(snap.Players) > 0 {
-			prevIdx := engine.PrevTurnIndex(snap.CurrentTurnIndex, len(snap.Players))
+		if err == nil && len(snap.Combatants) > 0 {
+			prevIdx := engine.PrevTurnIndex(snap.CurrentTurnIndex, len(snap.Combatants))
 			_ = h.store.UpdateCurrentTurnIndex(prevIdx)
 			h.mu.Lock()
 			h.currentTurnRolls = nil
 			h.mu.Unlock()
-			_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "TURN", fmt.Sprintf("Retrocedió turno → %s", snap.Players[prevIdx].Name), nil)
+			_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "TURN", fmt.Sprintf("Retrocedió turno → %s", snap.Combatants[prevIdx].Name), nil)
 		}
 
 	case "SET_ACTIVE_PLAYER":
-		players, err := h.store.ListPlayersOrdered()
+		snap, err := h.BuildSnapshot()
 		if err == nil {
-			for i, p := range players {
-				if p.ID == cmd.TargetPlayerID {
+			for i, cb := range snap.Combatants {
+				if cb.ID == cmd.TargetPlayerID {
 					_ = h.store.UpdateCurrentTurnIndex(i)
 					h.mu.Lock()
 					h.currentTurnRolls = nil
 					h.mu.Unlock()
-					_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "TURN", fmt.Sprintf("Asignó turno directo a %s", p.Name), nil)
+					_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "TURN", fmt.Sprintf("Asignó turno directo a %s", cb.Name), nil)
 					break
 				}
 			}
@@ -1603,6 +1702,9 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 			h.sendError(ctx, c, err.Error())
 			return
 		}
+		if cmd.EntityInInitiative != nil || cmd.EntityInitiative != nil || cmd.EntityAvatarURL != nil || cmd.EntityMonsterSlug != nil {
+			_ = h.store.UpdateMapEntityMeta(ent.ID, cmd.EntityInInitiative, cmd.EntityInitiative, cmd.EntityAvatarURL, cmd.EntityMonsterSlug)
+		}
 		if !ent.IsHidden {
 			_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "MAP_ENTITY", fmt.Sprintf("Colocó %s (%s) en (%d, %d)", ent.Name, ent.Kind, ent.X+1, ent.Y+1), nil)
 		}
@@ -1617,6 +1719,9 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 		if err := h.store.UpdateMapEntity(cmd.EntityID, cmd.EntityName, cmd.EntityHPCurrent, cmd.EntityHPMax, cmd.EntityNote, cmd.EntityHidden); err != nil {
 			h.sendError(ctx, c, err.Error())
 			return
+		}
+		if cmd.EntityInInitiative != nil || cmd.EntityInitiative != nil || cmd.EntityAvatarURL != nil || cmd.EntityMonsterSlug != nil {
+			_ = h.store.UpdateMapEntityMeta(cmd.EntityID, cmd.EntityInInitiative, cmd.EntityInitiative, cmd.EntityAvatarURL, cmd.EntityMonsterSlug)
 		}
 
 	case "DELETE_MAP_ENTITY":

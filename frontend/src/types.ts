@@ -383,6 +383,24 @@ export interface TLSStatus {
   tunnel: TunnelStatus
 }
 
+export interface Combatant {
+  id: string
+  kind: 'player' | 'monster' | string
+  name: string
+  initiative: number
+  avatar_url?: string
+  race_icon?: string
+  color_hex: string
+  hp_current?: number
+  hp_max?: number
+  token_x: number
+  token_y: number
+  is_hidden: boolean
+  is_connected: boolean
+  monster_slug?: string
+  character_id?: string
+}
+
 export interface StateSnapshot {
   sequence?: number
   session: SessionConfig
@@ -392,6 +410,8 @@ export interface StateSnapshot {
   users?: UserAccount[]
   characters?: CharacterRecord[]
   players: Player[]
+  combatants?: Combatant[]
+  active_combatant_id?: string
   map_entities: MapEntity[]
   map_scenes?: MapScene[]
   campaign_notes?: CampaignNote[]
