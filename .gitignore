@@ -16,6 +16,11 @@ frontend/dist/
 *.db-shm
 *.db-journal
 
+# Compendium & Obsidian local data (never commit copyrighted content)
+/compendium_data/
+/vault_export/
+*.compendium.db
+
 # OS metadata
 .DS_Store
 Thumbs.db
