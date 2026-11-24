@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { MapEntity, Player, SessionConfig, TemporaryMapEvent } from '../types'
 import { DND_CONDITIONS } from '../lib/srdCompendiumAndGenerators'
+import { useIsDesktop } from '../lib/useMediaQuery'
 
 export interface DMSelection {
   kind: 'player' | 'entity'
@@ -81,6 +82,7 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
 
   const [tool, setTool] = useState<CanvasTool>(isDM && dmMode === 'place' ? 'place' : 'move')
   const [toolsRadialOpen, setToolsRadialOpen] = useState(false)
+  const isDesktop = useIsDesktop()
   const [aoeShape, setAoeShape] = useState<'sphere' | 'cone' | 'cube' | 'line'>('cone')
   const [aoeRadiusFt, setAoeRadiusFt] = useState<number>(20)
   const [aoeOrigin, setAoeOrigin] = useState<{ x: number; y: number } | null>(null)
@@ -161,7 +163,7 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
     const onResize = () => fitToContainer()
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [fitToContainer])
+  }, [fitToContainer, isDesktop])
 
   // Center camera on focusTarget when user clicks a portrait in the initiative tracker
   useEffect(() => {
@@ -1043,7 +1045,78 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
     </div>
   )
 
+  const canvasEl = (
+    <canvas
+      ref={canvasRef}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={() => {
+        setHoverCell(null)
+        dragRef.current.active = false
+      }}
+      onWheel={handleWheel}
+      className="w-full h-full block"
+    />
+  )
+
   if (fullViewport) {
+    if (isDesktop) {
+      return (
+        <div className="relative w-full h-full flex flex-col overflow-hidden">
+          <div className="shrink-0 h-10 z-20 flex items-center justify-between gap-2 px-2.5 border-b border-violet-500/20 bg-[#0e091b]/90 backdrop-blur-md text-xs overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1.5">
+              {radialToolItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={item.onClick}
+                  title={item.label}
+                  className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 border shrink-0 transition ${item.colorClass}`}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5 text-slate-400 shrink-0">
+              <span className="font-mono text-[11px] mr-1">
+                <strong className="text-amber-200">{cols}×{rows}</strong>
+                {hoverCell && ` (${hoverCell.x + 1},${hoverCell.y + 1})`}
+              </span>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.max(0.15, z * 0.85))}
+                className="p-1.5 rounded-lg bg-[#090712] border border-violet-500/30 text-slate-200"
+                title="Alejar"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(4, z * 1.18))}
+                className="p-1.5 rounded-lg bg-[#090712] border border-violet-500/30 text-slate-200"
+                title="Acercar"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          <div
+            ref={containerRef}
+            className="relative flex-1 min-h-0 overflow-hidden bg-[#07050f] touch-none select-none cursor-crosshair"
+          >
+            {canvasEl}
+          </div>
+          {aoeBanner && (
+            <div className="absolute bottom-20 left-3 z-20 max-w-[calc(100vw-2rem)]">
+              {aoeBanner}
+            </div>
+          )}
+        </div>
+      )
+    }
+
     const innerToolsCount = Math.min(4, radialToolItems.length)
     return (
       <div className="relative w-full h-full overflow-hidden">
@@ -1051,18 +1124,7 @@ export const TacticalMapCanvas: React.FC<TacticalMapCanvasProps> = ({
           ref={containerRef}
           className="relative w-full h-full overflow-hidden bg-[#07050f] touch-none select-none cursor-crosshair"
         >
-          <canvas
-            ref={canvasRef}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={() => {
-              setHoverCell(null)
-              dragRef.current.active = false
-            }}
-            onWheel={handleWheel}
-            className="w-full h-full block"
-          />
+          {canvasEl}
         </div>
 
         {/* Floating AoE Directional Controls */}
