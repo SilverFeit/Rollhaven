@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { RotateCw, Sparkles } from 'lucide-react'
 import { RollBroadcast, SpinnerDetail } from '../types'
-import { triggerBounceHaptic, unlockHaptics } from '../lib/haptics'
+import { triggerBounceHaptic, triggerGestureHaptic } from '../lib/haptics'
 
 interface PeonzaArenaCanvasProps {
   faces: string[]
@@ -439,7 +439,7 @@ export const PeonzaArenaCanvas: React.FC<PeonzaArenaCanvasProps> = ({
 
   const startCharge = () => {
     if (disabled) return
-    unlockHaptics()
+    triggerGestureHaptic('tap')
     const st = stateRef.current
     if (st.phase === 'spinning' || st.phase === 'settling') return
     st.phase = 'charging'
@@ -451,6 +451,7 @@ export const PeonzaArenaCanvas: React.FC<PeonzaArenaCanvasProps> = ({
     if (disabled) return
     const st = stateRef.current
     if (st.phase === 'charging' || st.phase === 'idle' || st.phase === 'landed') {
+      triggerGestureHaptic('throw')
       onSpin()
     }
   }
@@ -490,7 +491,7 @@ export const PeonzaArenaCanvas: React.FC<PeonzaArenaCanvasProps> = ({
         type="button"
         disabled={disabled || phaseLabel === 'spinning' || phaseLabel === 'settling' || faces.length < 4}
         onClick={() => {
-          unlockHaptics()
+          triggerGestureHaptic('throw')
           onSpin()
         }}
         className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-amber-500 hover:from-violet-500 hover:to-amber-400 text-white font-bold text-sm shadow-lg transition disabled:opacity-45 flex items-center gap-2"

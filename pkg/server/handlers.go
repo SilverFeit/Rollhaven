@@ -77,7 +77,7 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 		LanIP:     lanIP,
 		Port:      port,
 		DMPIN:     dmPIN,
-		Version:   "1.2.0",
+		Version:   "1.3.0",
 		TLSConfig: tlsAssets.Config,
 		CACertPEM: tlsAssets.CACertPEM,
 	}
@@ -171,7 +171,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ver := s.Version
 	if ver == "" {
-		ver = "1.2.0"
+		ver = "1.3.0"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",

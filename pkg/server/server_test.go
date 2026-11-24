@@ -75,7 +75,7 @@ func TestHealthAndDMAuth(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		t.Fatal(err)
 	}
-	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Rollhaven" || health["version"] != "1.2.0" || health["license"] != "MIT" {
+	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Rollhaven" || health["version"] != "1.3.0" || health["license"] != "MIT" {
 		t.Fatalf("unexpected health response: %+v", health)
 	}
 
@@ -371,4 +371,269 @@ func TestDualProtocolHTTPAndHTTPS(t *testing.T) {
 	}
 	_ = readUntilEvent(t, ctx, wsConn, "STATE_SYNC")
 	_ = wsConn.Close(websocket.StatusNormalClosure, "ok")
+}
+
+func TestDMAllFiveDecisionSetsAndMapEntities(t *testing.T) {
+	_, ts := setupTestServer(t)
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Connect DM with explicit role & PIN
+	dmConn, _, err := websocket.Dial(ctx, wsURL+"?role=dm&pin=8492", nil)
+	if err != nil {
+		t.Fatalf("dial dm ws: %v", err)
+	}
+	defer dmConn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+
+	// Connect a player so broadcasts have an observer
+	playerConn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial player ws: %v", err)
+	}
+	defer playerConn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, playerConn, "STATE_SYNC")
+
+	joinPayload, _ := json.Marshal(map[string]any{
+		"name":       "Lyra",
+		"initiative": 17,
+		"race":       "elf",
+		"color":      "#38bdf8",
+	})
+	if err := wsjson.Write(ctx, playerConn, server.WSMessage{Event: "JOIN_ROOM", Payload: joinPayload}); err != nil {
+		t.Fatal(err)
+	}
+	_ = readUntilEvent(t, ctx, playerConn, "JOIN_ACK")
+
+	// 1. DM launches all 5 decision sets independently of whose turn it is
+	dmRolls := []map[string]any{
+		{"type": "DICE", "dice_notation": "1d20", "as_dm": true},
+		{"type": "COIN", "as_dm": true},
+		{"type": "MAGIC_8_BALL", "strict_yes_no": false, "question": "¿Hay trampa?", "as_dm": true},
+		{"type": "SPINNER", "faces": []string{"N", "S", "E", "O"}, "as_dm": true},
+		{"type": "WHEEL", "options": []string{"Cofre", "Emboscada"}, "as_dm": true},
+	}
+	for _, roll := range dmRolls {
+		b, _ := json.Marshal(roll)
+		if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "ROLL_ACTION", Payload: b}); err != nil {
+			t.Fatal(err)
+		}
+		resMsg := readUntilEvent(t, ctx, playerConn, "RESULT_BROADCAST")
+		if resMsg.Event != "RESULT_BROADCAST" {
+			t.Fatalf("expected RESULT_BROADCAST for %v", roll["type"])
+		}
+	}
+
+	// 2. Non-?role=dm connection can also elevate cleanly using valid PIN on ROLL_ACTION
+	dmLateConn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial late dm ws: %v", err)
+	}
+	defer dmLateConn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, dmLateConn, "STATE_SYNC")
+
+	elevatedRoll, _ := json.Marshal(map[string]any{
+		"type":  "WHEEL",
+		"as_dm": true,
+		"pin":   "8492",
+	})
+	if err := wsjson.Write(ctx, dmLateConn, server.WSMessage{Event: "ROLL_ACTION", Payload: elevatedRoll}); err != nil {
+		t.Fatal(err)
+	}
+	_ = readUntilEvent(t, ctx, playerConn, "RESULT_BROADCAST")
+
+	// 3. Configure rectangular map 20x30 (horizontal/corridor) and verify entity clamping & CRUD
+	rectCfg, _ := json.Marshal(map[string]any{
+		"action":      "UPDATE_MAP_CONFIG",
+		"map_enabled": true,
+		"map_rows":    20,
+		"map_cols":    30,
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: rectCfg}); err != nil {
+		t.Fatal(err)
+	}
+
+	var snap server.StateSnapshot
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		if err := json.Unmarshal(msg.Payload, &snap); err != nil {
+			t.Fatal(err)
+		}
+		if snap.Session.MapEnabled && snap.Session.MapRows == 20 && snap.Session.MapCols == 30 {
+			break
+		}
+	}
+
+	// Add enemy, hidden trap, and chest item across rectangular dimensions
+	addPayloads := []map[string]any{
+		{
+			"action":            "ADD_MAP_ENTITY",
+			"entity_kind":       "enemy",
+			"entity_name":       "Goblin",
+			"target_x":          28,
+			"target_y":          18,
+			"entity_size":       1,
+			"entity_color":      "#ef4444",
+			"entity_hp_current": 7,
+			"entity_hp_max":     7,
+			"entity_note":       "Arco corto",
+			"entity_hidden":     false,
+		},
+		{
+			"action":            "ADD_MAP_ENTITY",
+			"entity_kind":       "trap",
+			"entity_name":       "Foso Oculto",
+			"target_x":          15,
+			"target_y":          10,
+			"entity_size":       1,
+			"entity_color":      "#f97316",
+			"entity_hp_current": 0,
+			"entity_hp_max":     0,
+			"entity_note":       "DC 14 Percepción",
+			"entity_hidden":     true,
+		},
+		{
+			"action":            "ADD_MAP_ENTITY",
+			"entity_kind":       "item",
+			"entity_name":       "Cofre Antiguo",
+			"target_x":          5,
+			"target_y":          4,
+			"entity_size":       1,
+			"entity_color":      "#eab308",
+			"entity_hp_current": 0,
+			"entity_hp_max":     0,
+			"entity_hidden":     false,
+		},
+	}
+	for _, ap := range addPayloads {
+		b, _ := json.Marshal(ap)
+		if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var goblinID string
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		if err := json.Unmarshal(msg.Payload, &snap); err != nil {
+			t.Fatal(err)
+		}
+		if len(snap.MapEntities) == 3 {
+			for _, ent := range snap.MapEntities {
+				if ent.Kind == "enemy" && ent.Name == "Goblin" {
+					goblinID = ent.ID
+					if ent.X != 28 || ent.Y != 18 {
+						t.Fatalf("expected goblin at (28,18), got (%d,%d)", ent.X, ent.Y)
+					}
+				}
+			}
+			if goblinID != "" {
+				break
+			}
+		}
+	}
+
+	// Move goblin to (29, 19)
+	moveEntity, _ := json.Marshal(map[string]any{
+		"action":    "MOVE_MAP_ENTITY",
+		"entity_id": goblinID,
+		"target_x":  29,
+		"target_y":  19,
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: moveEntity}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		found := false
+		for _, ent := range snap.MapEntities {
+			if ent.ID == goblinID && ent.X == 29 && ent.Y == 19 {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	// Update HP & toggle stealth hidden
+	updEntity, _ := json.Marshal(map[string]any{
+		"action":            "UPDATE_MAP_ENTITY",
+		"entity_id":         goblinID,
+		"entity_hp_current": 3,
+		"entity_hp_max":     7,
+		"entity_hidden":     true,
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: updEntity}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		found := false
+		for _, ent := range snap.MapEntities {
+			if ent.ID == goblinID && ent.HPCurrent == 3 && ent.IsHidden {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	// Shrink map to 10x10 and verify goblin clamps to (9, 9)
+	shrinkCfg, _ := json.Marshal(map[string]any{
+		"action":      "UPDATE_MAP_CONFIG",
+		"map_enabled": true,
+		"map_rows":    10,
+		"map_cols":    10,
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: shrinkCfg}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if snap.Session.MapRows == 10 && snap.Session.MapCols == 10 {
+			for _, ent := range snap.MapEntities {
+				if ent.ID == goblinID && (ent.X > 9 || ent.Y > 9) {
+					t.Fatalf("expected goblin clamped <= 9, got (%d,%d)", ent.X, ent.Y)
+				}
+			}
+			break
+		}
+	}
+
+	// Delete goblin, then clear remaining entities
+	delEntity, _ := json.Marshal(map[string]any{
+		"action":    "DELETE_MAP_ENTITY",
+		"entity_id": goblinID,
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: delEntity}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if len(snap.MapEntities) == 2 {
+			break
+		}
+	}
+
+	clearEntities, _ := json.Marshal(map[string]any{
+		"action": "CLEAR_MAP_ENTITIES",
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: clearEntities}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if len(snap.MapEntities) == 0 {
+			break
+		}
+	}
 }

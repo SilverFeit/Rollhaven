@@ -118,9 +118,28 @@ export interface ActionLogEntry {
   created_at: string
 }
 
+export type MapEntityKind = 'enemy' | 'trap' | 'item' | 'npc' | 'hazard' | 'door'
+
+export interface MapEntity {
+  id: string
+  session_id: string
+  kind: MapEntityKind
+  name: string
+  x: number
+  y: number
+  size: number
+  color_hex: string
+  hp_current: number
+  hp_max: number
+  note: string
+  is_hidden: boolean
+  created_at: string
+}
+
 export interface StateSnapshot {
   session: SessionConfig
   players: Player[]
+  map_entities: MapEntity[]
   current_turn_index: number
   active_player_id: string
   current_turn_rolls: RollBroadcast[]

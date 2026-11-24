@@ -173,6 +173,7 @@ const PlayerWorkspace: React.FC = () => {
             <TacticalMapCanvas
               session={snapshot.session}
               players={snapshot.players}
+              entities={snapshot.map_entities ?? []}
               localPlayerID={playerID}
               activePlayerID={snapshot.active_player_id}
               onMoveToken={(_pid, x, y) => sendMessage('MOVE_TOKEN', { target_x: x, target_y: y })}
@@ -202,7 +203,7 @@ const PlayerWorkspace: React.FC = () => {
 
 export function App() {
   const [route, setRoute] = useState<string>(() => window.location.pathname)
-  const [appVersion, setAppVersion] = useState<string>('1.2.0')
+  const [appVersion, setAppVersion] = useState<string>('1.3.0')
   const [appLicense, setAppLicense] = useState<string>('MIT')
 
   useEffect(() => {

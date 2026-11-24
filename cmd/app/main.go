@@ -21,7 +21,7 @@ import (
 	"github.com/SilverFeit/Rollhaven/pkg/store"
 )
 
-var version = "1.2.0"
+var version = "1.3.0"
 
 func main() {
 	port := flag.Int("port", 8080, "Puerto HTTP/WebSocket local del servidor")

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Hand, ShieldCheck, Smartphone, Sparkles } from 'lucide-react'
 import { DiceDetail, RollBroadcast } from '../types'
-import { triggerBounceHaptic, unlockHaptics } from '../lib/haptics'
+import { supportsHardwareVibration, triggerBounceHaptic, triggerGestureHaptic, unlockHaptics } from '../lib/haptics'
 
 interface DicePhysicsArenaProps {
   selectedSides: number
@@ -447,7 +447,7 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
 
   const beginHoldShake = (clientX?: number, clientY?: number) => {
     if (disabled) return
-    unlockHaptics()
+    triggerGestureHaptic('shake')
     blurFocusedInputs()
     holdingRef.current = true
     if (clientX !== undefined && clientY !== undefined && containerRef.current) {
@@ -472,6 +472,7 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
     holdingRef.current = false
     pointerPosRef.current = null
     if (!disabled) {
+      triggerGestureHaptic('throw')
       preservedFromShakeRef.current = true
       physicsRef.current.phase = 'rolling'
       physicsRef.current.rollElapsed = 0
@@ -689,6 +690,7 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
         }}
         onPointerMove={(e) => {
           if (!holdingRef.current || !containerRef.current) return
+          triggerGestureHaptic('shake')
           const rect = containerRef.current.getBoundingClientRect()
           pointerPosRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
         }}
@@ -753,6 +755,12 @@ export const DicePhysicsArena: React.FC<DicePhysicsArenaProps> = ({
           {sensorStatus === 'active' ? 'Agitar Activo' : 'Agitar Celular'}
         </button>
       </div>
+
+      {!supportsHardwareVibration() && (
+        <div className="max-w-[360px] mx-auto text-[10px] text-slate-400 text-center">
+          iOS usa Taptic Engine nativo al tocar/batir (el vibrador continuo Web Vibration API solo está disponible en Android).
+        </div>
+      )}
 
       {(isLANPlainHTTP || sensorStatus === 'needs_https') && (
         <div className="max-w-[360px] mx-auto rounded-xl bg-violet-950/50 border border-violet-400/40 px-3 py-2 text-[11px] text-violet-200 flex items-center justify-between gap-2">

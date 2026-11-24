@@ -2,6 +2,20 @@
 
 All notable changes to **Rollhaven** (formerly Dicebound) are documented in this file.
 
+## [1.3.0] — 2026-11-24
+
+### Fixed & Added
+- **Hardware Haptics & Mobile Vibration (Android & iOS):**
+  - Tuned collision/bounce pulse durations (`48ms` light, `68ms` medium, `[65, 50, 90]` heavy) with a non-cancelling vibration lock to clear Android ERM/LRA spin-up latency, plus synchronous trusted user-gesture triggers (`pointerdown`/`pointermove`/`pointerup`/`click`) for both `navigator.vibrate()` and iOS Taptic `<input type="checkbox" switch />`.
+- **DM All-5 Decision Sets & WebSocket Stability:**
+  - Fixed the stale-connection race in `useDiceboundSocket` when upgrading `DMDashboard` from unauthenticated to `role=dm`, and allowed DM PIN/localhost auto-elevation on `ROLL_ACTION` so all 5 decision sets (Dice, Coin, Magic 8 Ball, Peonza, Ruleta) broadcast cleanly from the DM panel (with an optional simultaneous "Ver los 5 Sets" view).
+- **True Rectangular Maps with 1:1 Square Grid Cells:**
+  - Replaced the forced `1:1` board frame in `TacticalMapCanvas` with `cols * 50` × `rows * 50` logical dimensions so rectangular maps (`20x30`, `25x30`, hallways) adjust their outer aspect ratio while keeping every internal tile strictly square.
+- **DM Tactical Map Entities (`map_entities`):**
+  - Added SQLite persistence (`map_entities` table) and DM WebSocket controls (`ADD_MAP_ENTITY`, `MOVE_MAP_ENTITY`, `UPDATE_MAP_ENTITY`, `DELETE_MAP_ENTITY`, `CLEAR_MAP_ENTITIES`) for Enemies, Traps, Items/Loot, NPCs, Hazards, and Doors/POIs with HP tracking, sizes (`1x1`–`4x4`), notes, and DM-only hidden visibility (`is_hidden`).
+
+---
+
 ## [1.2.0] — 2026-11-23
 
 ### Changed & Added

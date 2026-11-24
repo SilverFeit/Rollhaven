@@ -45,6 +45,7 @@ type RollBroadcast struct {
 type StateSnapshot struct {
 	Session          store.Session          `json:"session"`
 	Players          []store.Player         `json:"players"`
+	MapEntities      []store.MapEntity      `json:"map_entities"`
 	CurrentTurnIndex int                    `json:"current_turn_index"`
 	ActivePlayerID   string                 `json:"active_player_id"`
 	CurrentTurnRolls []RollBroadcast        `json:"current_turn_rolls"`
@@ -172,6 +173,10 @@ func (h *Hub) BuildSnapshot() (StateSnapshot, error) {
 	if err != nil {
 		return StateSnapshot{}, err
 	}
+	mapEntities, err := h.store.ListMapEntities()
+	if err != nil {
+		return StateSnapshot{}, err
+	}
 	logs, err := h.store.ListActionLog(60)
 	if err != nil {
 		return StateSnapshot{}, err
@@ -204,6 +209,7 @@ func (h *Hub) BuildSnapshot() (StateSnapshot, error) {
 	return StateSnapshot{
 		Session:          sess,
 		Players:          players,
+		MapEntities:      mapEntities,
 		CurrentTurnIndex: turnIdx,
 		ActivePlayerID:   activeID,
 		CurrentTurnRolls: rollsCopy,
@@ -410,10 +416,16 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 			Faces        []string `json:"faces"`
 			Options      []string `json:"options"`
 			AsDM         bool     `json:"as_dm"`
+			PIN          string   `json:"pin"`
 		}
 		if err := json.Unmarshal(msg.Payload, &req); err != nil {
 			h.sendError(ctx, c, "Payload ROLL_ACTION inválido")
 			return
+		}
+		if req.AsDM && !c.isDM {
+			if isLocalhostIP(c.clientIP) || (h.dmPIN != "" && req.PIN == h.dmPIN) {
+				c.isDM = true
+			}
 		}
 		h.handleRollAction(ctx, c, msg.PlayerID, req.Type, req.DiceNotation, req.StrictYesNo, req.Question, req.Faces, req.Options, req.AsDM)
 
@@ -752,6 +764,15 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 		Hidden          bool     `json:"hidden"`
 		StrictTurnRolls *bool    `json:"strict_turn_rolls"`
 		StrictTurnMove  *bool    `json:"strict_turn_move"`
+		EntityID        string   `json:"entity_id"`
+		EntityKind      string   `json:"entity_kind"`
+		EntityName      string   `json:"entity_name"`
+		EntitySize      int      `json:"entity_size"`
+		EntityColor     string   `json:"entity_color"`
+		EntityHPCurrent *int     `json:"entity_hp_current"`
+		EntityHPMax     *int     `json:"entity_hp_max"`
+		EntityNote      *string  `json:"entity_note"`
+		EntityHidden    *bool    `json:"entity_hidden"`
 	}
 	if err := json.Unmarshal(payload, &cmd); err != nil {
 		h.sendError(ctx, c, "Payload DM_OVERRIDE inválido")
@@ -889,6 +910,60 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 			h.strictTurnMove = *cmd.StrictTurnMove
 		}
 		h.mu.Unlock()
+
+	case "ADD_MAP_ENTITY":
+		hpCur := 0
+		hpMax := 0
+		if cmd.EntityHPCurrent != nil {
+			hpCur = *cmd.EntityHPCurrent
+		}
+		if cmd.EntityHPMax != nil {
+			hpMax = *cmd.EntityHPMax
+		}
+		note := ""
+		if cmd.EntityNote != nil {
+			note = *cmd.EntityNote
+		}
+		isHidden := false
+		if cmd.EntityHidden != nil {
+			isHidden = *cmd.EntityHidden
+		}
+		ent, err := h.store.AddMapEntity(
+			cmd.EntityKind, cmd.EntityName,
+			cmd.TargetX, cmd.TargetY, cmd.EntitySize,
+			cmd.EntityColor, hpCur, hpMax, note, isHidden,
+		)
+		if err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		if !ent.IsHidden {
+			_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "MAP_ENTITY", fmt.Sprintf("Colocó %s (%s) en (%d, %d)", ent.Name, ent.Kind, ent.X+1, ent.Y+1), nil)
+		}
+
+	case "MOVE_MAP_ENTITY":
+		if err := h.store.MoveMapEntity(cmd.EntityID, cmd.TargetX, cmd.TargetY); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+
+	case "UPDATE_MAP_ENTITY":
+		if err := h.store.UpdateMapEntity(cmd.EntityID, cmd.EntityName, cmd.EntityHPCurrent, cmd.EntityHPMax, cmd.EntityNote, cmd.EntityHidden); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+
+	case "DELETE_MAP_ENTITY":
+		if err := h.store.DeleteMapEntity(cmd.EntityID); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+
+	case "CLEAR_MAP_ENTITIES":
+		if err := h.store.ClearMapEntities(); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
 	}
 
 	h.BroadcastStateSync()

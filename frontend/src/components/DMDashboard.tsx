@@ -1,29 +1,114 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import {
+  AlertTriangle,
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
   Copy,
   Crown,
+  DoorOpen,
   Eye,
   EyeOff,
+  Flame,
+  Gem,
   GripVertical,
+  Hand,
   KeyRound,
   Map as MapIcon,
+  MapPin,
   NotebookPen,
   RefreshCw,
   ScrollText,
+  Shield,
   ShieldCheck,
+  Skull,
   Trash2,
   Upload,
   Users,
 } from 'lucide-react'
 import { useDiceboundSocket } from '../hooks/useDiceboundSocket'
+import { MapEntityKind } from '../types'
 import { DecisionSets } from './DecisionSets'
 import { RaceSVG } from './RaceIcons'
-import { TacticalMapCanvas } from './TacticalMapCanvas'
+import { DMSelection, TacticalMapCanvas } from './TacticalMapCanvas'
 import { TurnBanner } from './TurnBanner'
+
+const ENTITY_CATEGORIES: {
+  kind: MapEntityKind
+  label: string
+  defaultColor: string
+  defaultHP: number
+  presets: { name: string; hp: number; size: number; note: string }[]
+}[] = [
+  {
+    kind: 'enemy',
+    label: 'Enemigo',
+    defaultColor: '#dc2626',
+    defaultHP: 18,
+    presets: [
+      { name: 'Goblin', hp: 7, size: 1, note: 'AC 15' },
+      { name: 'Orco', hp: 15, size: 1, note: 'AC 13' },
+      { name: 'Ogro', hp: 59, size: 2, note: 'AC 11 · Grande 2×2' },
+      { name: 'Dragón', hp: 178, size: 3, note: 'AC 18 · Enorme 3×3' },
+    ],
+  },
+  {
+    kind: 'trap',
+    label: 'Trampa',
+    defaultColor: '#f59e0b',
+    defaultHP: 0,
+    presets: [
+      { name: 'Trampa Foso', hp: 0, size: 1, note: 'DC 14 Percepción · 2d6' },
+      { name: 'Dardos', hp: 0, size: 1, note: 'DC 15 Destreza · 1d10' },
+      { name: 'Runa Explosiva', hp: 0, size: 2, note: 'DC 15 Arcano · 5d8' },
+    ],
+  },
+  {
+    kind: 'item',
+    label: 'Ítem / Tesoro',
+    defaultColor: '#06b6d4',
+    defaultHP: 0,
+    presets: [
+      { name: 'Cofre', hp: 0, size: 1, note: 'Botín / Cerradura DC 12' },
+      { name: 'Poción', hp: 0, size: 1, note: 'Curación 2d4+2' },
+      { name: 'Reliquia', hp: 0, size: 1, note: 'Objeto mágico' },
+    ],
+  },
+  {
+    kind: 'npc',
+    label: 'NPC / Aliado',
+    defaultColor: '#3b82f6',
+    defaultHP: 12,
+    presets: [
+      { name: 'Guardia', hp: 11, size: 1, note: 'Aliado / Neutral' },
+      { name: 'Mercader', hp: 9, size: 1, note: 'Comercio / Misión' },
+      { name: 'Mago', hp: 22, size: 1, note: 'Conjuros' },
+    ],
+  },
+  {
+    kind: 'hazard',
+    label: 'Peligro / Área',
+    defaultColor: '#f97316',
+    defaultHP: 0,
+    presets: [
+      { name: 'Fuego', hp: 0, size: 2, note: '1d6 fuego al iniciar turno' },
+      { name: 'Ácido / Lava', hp: 0, size: 2, note: '2d10 daño área' },
+      { name: 'Niebla / Oscuridad', hp: 0, size: 3, note: 'Visibilidad nula' },
+    ],
+  },
+  {
+    kind: 'door',
+    label: 'Puerta / Punto',
+    defaultColor: '#a16207',
+    defaultHP: 20,
+    presets: [
+      { name: 'Puerta Cerrada', hp: 20, size: 1, note: 'Ganzúa DC 15' },
+      { name: 'Puerta Secreta', hp: 20, size: 1, note: 'Investigación DC 16' },
+      { name: 'Portal / Altar', hp: 0, size: 2, note: 'Punto interactivo' },
+    ],
+  },
+]
 
 function parseDeviceLabel(ua: string): string {
   if (!ua) return 'Desconocido'
@@ -59,7 +144,15 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   // Initiative inline edit & drag-and-drop
   const [editingInit, setEditingInit] = useState<Record<string, string>>({})
   const [draggedPlayerID, setDraggedPlayerID] = useState<string | null>(null)
-  const [selectedTokenID, setSelectedTokenID] = useState<string>('')
+  const [selectedTarget, setSelectedTarget] = useState<DMSelection | null>(null)
+  const [dmMapMode, setDmMapMode] = useState<'move' | 'place'>('move')
+  const [entityKind, setEntityKind] = useState<MapEntityKind>('enemy')
+  const [entityName, setEntityName] = useState('Goblin')
+  const [entityHP, setEntityHP] = useState('7')
+  const [entitySize, setEntitySize] = useState(1)
+  const [entityColor, setEntityColor] = useState('#dc2626')
+  const [entityNote, setEntityNote] = useState('AC 15')
+  const [entityHidden, setEntityHidden] = useState(false)
   const mapFileRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -110,13 +203,14 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   const { snapshot, connected, lastBroadcast, errorMsg, sendMessage, clearError } = useDiceboundSocket({
     isDM: Boolean(authorized),
     dmPIN: verifiedPIN,
+    enabled: Boolean(authorized),
   })
 
   useEffect(() => {
-    if (snapshot?.players?.length && !selectedTokenID) {
-      setSelectedTokenID(snapshot.players[0].id)
+    if (snapshot?.players?.length && !selectedTarget) {
+      setSelectedTarget({ kind: 'player', id: snapshot.players[0].id })
     }
-  }, [snapshot?.players, selectedTokenID])
+  }, [snapshot?.players, selectedTarget])
 
   const handlePinSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -534,7 +628,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
               Lanzador del Dungeon Master (Oculto o Visible en Feed Global)
             </h2>
             <DecisionSets
-              onRoll={(payload) => sendMessage('ROLL_ACTION', payload)}
+              onRoll={(payload) => sendMessage('ROLL_ACTION', { ...payload, pin: verifiedPIN })}
               lastBroadcast={lastBroadcast}
               localPlayerID="dm"
               asDM
@@ -734,59 +828,352 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
               </div>
             </div>
 
-            {/* Token selector & visibility for DM */}
-            {players.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-slate-400 mr-1">Mover / Visibilidad de Ficha:</span>
-                {players.map((p) => {
-                  const selected = selectedTokenID === p.id
+            {/* DM Map Mode Switch + Entity Spawner (Enemies, Traps, Items, NPCs, Hazards, Doors) */}
+            <div className="bg-[#090712]/75 rounded-xl p-3.5 border border-violet-500/20 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setDmMapMode('move')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+                      dmMapMode === 'move'
+                        ? 'bg-violet-600 text-white'
+                        : 'bg-[#120d22] text-slate-400 hover:text-slate-200 border border-violet-500/20'
+                    }`}
+                  >
+                    <Hand className="w-3.5 h-3.5" /> Mover Fichas / Elementos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDmMapMode('place')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+                      dmMapMode === 'place'
+                        ? 'bg-emerald-500 text-slate-950'
+                        : 'bg-[#120d22] text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/10'
+                    }`}
+                  >
+                    <MapPin className="w-3.5 h-3.5" /> Colocar Elemento en Clic
+                  </button>
+                </div>
+
+                {(snapshot.map_entities?.length ?? 0) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => sendDMOverride({ action: 'CLEAR_MAP_ENTITIES' })}
+                    className="text-[11px] text-rose-300 hover:text-rose-200 underline"
+                  >
+                    Limpiar todos ({snapshot.map_entities.length})
+                  </button>
+                )}
+              </div>
+
+              {/* Category selector & Presets */}
+              <div className="flex flex-wrap gap-1.5">
+                {ENTITY_CATEGORIES.map((cat) => {
+                  const active = entityKind === cat.kind
+                  const IconComp =
+                    cat.kind === 'enemy'
+                      ? Skull
+                      : cat.kind === 'trap'
+                        ? AlertTriangle
+                        : cat.kind === 'item'
+                          ? Gem
+                          : cat.kind === 'npc'
+                            ? Shield
+                            : cat.kind === 'hazard'
+                              ? Flame
+                              : DoorOpen
                   return (
-                    <div
-                      key={p.id}
-                      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 border text-xs ${
-                        selected
-                          ? 'border-amber-400 bg-violet-900/50 text-amber-100'
-                          : 'border-violet-500/20 bg-[#090712]/70 text-slate-300'
+                    <button
+                      key={cat.kind}
+                      type="button"
+                      onClick={() => {
+                        setEntityKind(cat.kind)
+                        setEntityColor(cat.defaultColor)
+                        const first = cat.presets[0]
+                        if (first) {
+                          setEntityName(first.name)
+                          setEntityHP(String(first.hp))
+                          setEntitySize(first.size)
+                          setEntityNote(first.note)
+                        }
+                        setEntityHidden(cat.kind === 'trap')
+                        setDmMapMode('place')
+                      }}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border transition ${
+                        active
+                          ? 'border-amber-400 bg-violet-900/60 text-amber-100'
+                          : 'border-violet-500/20 bg-[#120d22] text-slate-300 hover:border-violet-400/50'
                       }`}
                     >
-                      <button
-                        type="button"
-                        onClick={() => setSelectedTokenID(p.id)}
-                        className="flex items-center gap-1.5 font-semibold"
-                      >
-                        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: p.color_hex }} />
-                        {p.name}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          sendDMOverride({
-                            action: 'TOGGLE_TOKEN_VISIBILITY',
-                            target_player_id: p.id,
-                            hidden: !p.token_hidden,
-                          })
-                        }
-                        title={p.token_hidden ? 'Mostrar ficha' : 'Ocultar ficha'}
-                        className="text-slate-400 hover:text-white ml-1"
-                      >
-                        {p.token_hidden ? <EyeOff className="w-3.5 h-3.5 text-rose-400" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
+                      <IconComp className="w-3.5 h-3.5" style={{ color: cat.defaultColor }} />
+                      {cat.label}
+                    </button>
                   )
                 })}
+              </div>
+
+              {/* Quick Presets for active category */}
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span className="text-slate-400 mr-1">Presets rápidos:</span>
+                {ENTITY_CATEGORIES.find((c) => c.kind === entityKind)?.presets.map((pr) => (
+                  <button
+                    key={pr.name}
+                    type="button"
+                    onClick={() => {
+                      setEntityName(pr.name)
+                      setEntityHP(String(pr.hp))
+                      setEntitySize(pr.size)
+                      setEntityNote(pr.note)
+                      setDmMapMode('place')
+                    }}
+                    className="px-2 py-0.5 rounded bg-[#120d22] border border-violet-500/25 text-violet-200 hover:border-amber-400"
+                  >
+                    {pr.name}
+                  </button>
+                ))}
+              </div>
+
+              {/* Custom fields for next placed entity */}
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs">
+                <input
+                  type="text"
+                  value={entityName}
+                  onChange={(e) => setEntityName(e.target.value)}
+                  placeholder="Nombre (ej. Jefe Goblin)"
+                  className="col-span-2 sm:col-span-2 px-2.5 py-1.5 rounded-lg bg-[#120d22] border border-violet-500/25 text-slate-100"
+                />
+                <input
+                  type="number"
+                  min={0}
+                  max={9999}
+                  value={entityHP}
+                  onChange={(e) => setEntityHP(e.target.value)}
+                  placeholder="HP"
+                  className="px-2.5 py-1.5 rounded-lg bg-[#120d22] border border-violet-500/25 text-amber-200 font-mono"
+                />
+                <select
+                  value={entitySize}
+                  onChange={(e) => setEntitySize(Number(e.target.value))}
+                  className="px-2 py-1.5 rounded-lg bg-[#120d22] border border-violet-500/25 text-slate-100"
+                >
+                  <option value={1}>Tamaño 1×1</option>
+                  <option value={2}>Grande 2×2</option>
+                  <option value={3}>Enorme 3×3</option>
+                  <option value={4}>Garg. 4×4</option>
+                </select>
+                <input
+                  type="text"
+                  value={entityNote}
+                  onChange={(e) => setEntityNote(e.target.value)}
+                  placeholder="Nota / DC / AC"
+                  className="col-span-2 sm:col-span-2 px-2.5 py-1.5 rounded-lg bg-[#120d22] border border-violet-500/25 text-slate-100"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={entityHidden}
+                    onChange={(e) => setEntityHidden(e.target.checked)}
+                    className="rounded accent-violet-500"
+                  />
+                  Oculto a jugadores (ideal para trampas / emboscadas)
+                </label>
+                <span className="text-[11px] text-emerald-300/90">
+                  {dmMapMode === 'place'
+                    ? '✓ Haz clic en cualquier celda del mapa abajo para colocar'
+                    : 'Cambia a "Colocar Elemento en Clic" para añadir en el mapa'}
+                </span>
+              </div>
+            </div>
+
+            {/* Selectable Players & Placed Entities Strip */}
+            {(players.length > 0 || (snapshot.map_entities?.length ?? 0) > 0) && (
+              <div className="space-y-2">
+                {players.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-400 mr-1">Jugadores:</span>
+                    {players.map((p) => {
+                      const selected = selectedTarget?.kind === 'player' && selectedTarget.id === p.id
+                      return (
+                        <div
+                          key={p.id}
+                          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 border text-xs ${
+                            selected
+                              ? 'border-amber-400 bg-violet-900/50 text-amber-100'
+                              : 'border-violet-500/20 bg-[#090712]/70 text-slate-300'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTarget({ kind: 'player', id: p.id })
+                              setDmMapMode('move')
+                            }}
+                            className="flex items-center gap-1.5 font-semibold"
+                          >
+                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: p.color_hex }} />
+                            {p.name}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              sendDMOverride({
+                                action: 'TOGGLE_TOKEN_VISIBILITY',
+                                target_player_id: p.id,
+                                hidden: !p.token_hidden,
+                              })
+                            }
+                            title={p.token_hidden ? 'Mostrar ficha' : 'Ocultar ficha'}
+                            className="text-slate-400 hover:text-white ml-1"
+                          >
+                            {p.token_hidden ? <EyeOff className="w-3.5 h-3.5 text-rose-400" /> : <Eye className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {(snapshot.map_entities?.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-400 mr-1">Elementos en Mapa:</span>
+                    {snapshot.map_entities.map((ent) => {
+                      const selected = selectedTarget?.kind === 'entity' && selectedTarget.id === ent.id
+                      return (
+                        <div
+                          key={ent.id}
+                          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 border text-xs ${
+                            selected
+                              ? 'border-amber-400 bg-violet-900/50 text-amber-100'
+                              : 'border-violet-500/20 bg-[#090712]/70 text-slate-300'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTarget({ kind: 'entity', id: ent.id })
+                              setDmMapMode('move')
+                            }}
+                            className="flex items-center gap-1.5 font-semibold"
+                          >
+                            <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: ent.color_hex }} />
+                            <span>{ent.name}</span>
+                            {ent.note && <span className="text-[10px] text-slate-400">({ent.note})</span>}
+                          </button>
+
+                          {ent.hp_max > 0 && (
+                            <div className="flex items-center gap-1 ml-1 bg-black/40 px-1.5 py-0.5 rounded">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  sendDMOverride({
+                                    action: 'UPDATE_MAP_ENTITY',
+                                    entity_id: ent.id,
+                                    entity_hp_current: Math.max(0, ent.hp_current - 1),
+                                  })
+                                }
+                                className="text-rose-300 font-bold px-1"
+                              >
+                                -
+                              </button>
+                              <span className="font-mono text-[11px] text-emerald-300">
+                                {ent.hp_current}/{ent.hp_max}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  sendDMOverride({
+                                    action: 'UPDATE_MAP_ENTITY',
+                                    entity_id: ent.id,
+                                    entity_hp_current: ent.hp_current + 1,
+                                  })
+                                }
+                                className="text-emerald-300 font-bold px-1"
+                              >
+                                +
+                              </button>
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              sendDMOverride({
+                                action: 'UPDATE_MAP_ENTITY',
+                                entity_id: ent.id,
+                                entity_hidden: !ent.is_hidden,
+                              })
+                            }
+                            title={ent.is_hidden ? 'Revelar a jugadores' : 'Ocultar a jugadores'}
+                            className="text-slate-400 hover:text-white ml-0.5"
+                          >
+                            {ent.is_hidden ? <EyeOff className="w-3.5 h-3.5 text-rose-400" /> : <Eye className="w-3.5 h-3.5" />}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => sendDMOverride({ action: 'DELETE_MAP_ENTITY', entity_id: ent.id })}
+                            title="Eliminar del mapa"
+                            className="text-slate-400 hover:text-rose-400"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
             <TacticalMapCanvas
               session={snapshot.session}
               players={snapshot.players}
+              entities={snapshot.map_entities ?? []}
               localPlayerID=""
               activePlayerID={snapshot.active_player_id}
               isDM
-              selectedDMPlayerID={selectedTokenID}
+              dmMode={dmMapMode}
+              selectedDMTarget={selectedTarget}
               onMoveToken={(pid, x, y) =>
                 sendDMOverride({ action: 'MOVE_ANY_TOKEN', target_player_id: pid, target_x: x, target_y: y })
               }
+              onCellClick={(x, y) => {
+                if (dmMapMode === 'place') {
+                  const hpParsed = Number.parseInt(entityHP, 10)
+                  const hpVal = Number.isNaN(hpParsed) ? 0 : Math.max(0, hpParsed)
+                  sendDMOverride({
+                    action: 'ADD_MAP_ENTITY',
+                    entity_kind: entityKind,
+                    entity_name: entityName.trim() || 'Elemento',
+                    entity_size: entitySize,
+                    entity_color: entityColor,
+                    entity_hp_current: hpVal,
+                    entity_hp_max: hpVal,
+                    entity_note: entityNote.trim(),
+                    entity_hidden: entityHidden,
+                    target_x: x,
+                    target_y: y,
+                  })
+                } else if (selectedTarget?.kind === 'player') {
+                  sendDMOverride({
+                    action: 'MOVE_ANY_TOKEN',
+                    target_player_id: selectedTarget.id,
+                    target_x: x,
+                    target_y: y,
+                  })
+                } else if (selectedTarget?.kind === 'entity') {
+                  sendDMOverride({
+                    action: 'MOVE_MAP_ENTITY',
+                    entity_id: selectedTarget.id,
+                    target_x: x,
+                    target_y: y,
+                  })
+                }
+              }}
             />
           </section>
         )}

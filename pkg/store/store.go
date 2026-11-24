@@ -72,6 +72,23 @@ type ActionLogEntry struct {
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
+// MapEntity represents an enemy, trap, item, NPC, hazard, or interactive point placed by the DM on the tactical map.
+type MapEntity struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"session_id"`
+	Kind      string    `json:"kind"` // enemy | trap | item | npc | hazard | door
+	Name      string    `json:"name"`
+	X         int       `json:"x"`
+	Y         int       `json:"y"`
+	Size      int       `json:"size"` // 1 (1x1), 2 (2x2), 3 (3x3)
+	ColorHex  string    `json:"color_hex"`
+	HPCurrent int       `json:"hp_current"`
+	HPMax     int       `json:"hp_max"`
+	Note      string    `json:"note"`
+	IsHidden  bool      `json:"is_hidden"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Store wraps all SQLite reads and writes for Rollhaven.
 type Store struct {
 	db *sql.DB
@@ -171,11 +188,17 @@ func (s *Store) UpdateMapConfig(enabled bool, rows, cols int, gridColor string, 
 		return Session{}, err
 	}
 
-	// Clamp all player tokens inside the new bounds
+	// Clamp all player tokens and map entities inside the new bounds
 	_, _ = s.db.Exec(`
 		UPDATE players
 		SET token_x = CASE WHEN token_x >= ? THEN ? ELSE token_x END,
 		    token_y = CASE WHEN token_y >= ? THEN ? ELSE token_y END
+		WHERE session_id = ?
+	`, cols, cols-1, rows, rows-1, DefaultSessionID)
+	_, _ = s.db.Exec(`
+		UPDATE map_entities
+		SET x = CASE WHEN x >= ? THEN ? ELSE x END,
+		    y = CASE WHEN y >= ? THEN ? ELSE y END
 		WHERE session_id = ?
 	`, cols, cols-1, rows, rows-1, DefaultSessionID)
 
@@ -664,4 +687,180 @@ func (s *Store) ListActionLog(limit int) ([]ActionLogEntry, error) {
 		entries = []ActionLogEntry{}
 	}
 	return entries, rows.Err()
+}
+
+// ListMapEntities returns all DM-placed tactical map entities (enemies, traps, items, NPCs, hazards, doors).
+func (s *Store) ListMapEntities() ([]MapEntity, error) {
+	rows, err := s.db.Query(`
+		SELECT id, session_id, kind, name, x, y, size, color_hex, hp_current, hp_max, note, is_hidden, created_at
+		FROM map_entities
+		WHERE session_id = ?
+		ORDER BY created_at ASC, name ASC
+	`, DefaultSessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entities []MapEntity
+	for rows.Next() {
+		var e MapEntity
+		var hidden int
+		if err := rows.Scan(
+			&e.ID, &e.SessionID, &e.Kind, &e.Name,
+			&e.X, &e.Y, &e.Size, &e.ColorHex,
+			&e.HPCurrent, &e.HPMax, &e.Note, &hidden, &e.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		e.IsHidden = hidden != 0
+		entities = append(entities, e)
+	}
+	if entities == nil {
+		entities = []MapEntity{}
+	}
+	return entities, rows.Err()
+}
+
+// AddMapEntity spawns a new tactical entity on the grid within valid bounds.
+func (s *Store) AddMapEntity(kind, name string, x, y, size int, colorHex string, hpCurrent, hpMax int, note string, isHidden bool) (MapEntity, error) {
+	sess, err := s.GetSession()
+	if err != nil {
+		return MapEntity{}, err
+	}
+	if x < 0 {
+		x = 0
+	} else if x >= sess.MapCols {
+		x = sess.MapCols - 1
+	}
+	if y < 0 {
+		y = 0
+	} else if y >= sess.MapRows {
+		y = sess.MapRows - 1
+	}
+	if size < 1 {
+		size = 1
+	} else if size > 4 {
+		size = 4
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" {
+		kind = "enemy"
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Elemento"
+	}
+	if strings.TrimSpace(colorHex) == "" {
+		colorHex = "#ef4444"
+	}
+	if hpMax > 0 && hpCurrent == 0 {
+		hpCurrent = hpMax
+	}
+	if hpMax < 0 {
+		hpMax = 0
+	}
+	if hpCurrent < 0 {
+		hpCurrent = 0
+	}
+
+	id := "ent_" + uuid.NewString()[:8]
+	now := time.Now().UTC()
+	hiddenInt := 0
+	if isHidden {
+		hiddenInt = 1
+	}
+
+	_, err = s.db.Exec(`
+		INSERT INTO map_entities (id, session_id, kind, name, x, y, size, color_hex, hp_current, hp_max, note, is_hidden, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, DefaultSessionID, kind, name, x, y, size, colorHex, hpCurrent, hpMax, strings.TrimSpace(note), hiddenInt, now)
+	if err != nil {
+		return MapEntity{}, err
+	}
+
+	return MapEntity{
+		ID:        id,
+		SessionID: DefaultSessionID,
+		Kind:      kind,
+		Name:      name,
+		X:         x,
+		Y:         y,
+		Size:      size,
+		ColorHex:  colorHex,
+		HPCurrent: hpCurrent,
+		HPMax:     hpMax,
+		Note:      strings.TrimSpace(note),
+		IsHidden:  isHidden,
+		CreatedAt: now,
+	}, nil
+}
+
+// MoveMapEntity moves a DM-placed entity to (x, y) within grid bounds.
+func (s *Store) MoveMapEntity(id string, x, y int) error {
+	sess, err := s.GetSession()
+	if err != nil {
+		return err
+	}
+	if x < 0 || x >= sess.MapCols || y < 0 || y >= sess.MapRows {
+		return fmt.Errorf("coordenadas fuera del mapa (%d, %d) para grilla %dx%d", x, y, sess.MapCols, sess.MapRows)
+	}
+	_, err = s.db.Exec(`UPDATE map_entities SET x = ?, y = ? WHERE id = ? AND session_id = ?`, x, y, id, DefaultSessionID)
+	return err
+}
+
+// UpdateMapEntity updates mutable fields (name, HP, note, visibility) of an existing map entity.
+func (s *Store) UpdateMapEntity(id, name string, hpCurrent, hpMax *int, note *string, isHidden *bool) error {
+	var curName, curNote string
+	var curHP, curMax, curHidden int
+	err := s.db.QueryRow(`
+		SELECT name, hp_current, hp_max, note, is_hidden
+		FROM map_entities WHERE id = ? AND session_id = ?
+	`, id, DefaultSessionID).Scan(&curName, &curHP, &curMax, &curNote, &curHidden)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(name) != "" {
+		curName = strings.TrimSpace(name)
+	}
+	if hpCurrent != nil {
+		curHP = *hpCurrent
+		if curHP < 0 {
+			curHP = 0
+		}
+	}
+	if hpMax != nil {
+		curMax = *hpMax
+		if curMax < 0 {
+			curMax = 0
+		}
+	}
+	if note != nil {
+		curNote = strings.TrimSpace(*note)
+	}
+	if isHidden != nil {
+		if *isHidden {
+			curHidden = 1
+		} else {
+			curHidden = 0
+		}
+	}
+	_, err = s.db.Exec(`
+		UPDATE map_entities
+		SET name = ?, hp_current = ?, hp_max = ?, note = ?, is_hidden = ?
+		WHERE id = ? AND session_id = ?
+	`, curName, curHP, curMax, curNote, curHidden, id, DefaultSessionID)
+	return err
+}
+
+// DeleteMapEntity removes a single entity from the tactical map.
+func (s *Store) DeleteMapEntity(id string) error {
+	_, err := s.db.Exec(`DELETE FROM map_entities WHERE id = ? AND session_id = ?`, id, DefaultSessionID)
+	return err
+}
+
+// ClearMapEntities deletes all DM-placed entities from the active session.
+func (s *Store) ClearMapEntities() error {
+	_, err := s.db.Exec(`DELETE FROM map_entities WHERE session_id = ?`, DefaultSessionID)
+	return err
 }

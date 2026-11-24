@@ -66,3 +66,20 @@ CREATE TABLE IF NOT EXISTS action_log (
     result_json TEXT DEFAULT '{}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS map_entities (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    x INTEGER DEFAULT 0,
+    y INTEGER DEFAULT 0,
+    size INTEGER DEFAULT 1,
+    color_hex TEXT NOT NULL,
+    hp_current INTEGER DEFAULT 0,
+    hp_max INTEGER DEFAULT 0,
+    note TEXT DEFAULT '',
+    is_hidden INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(session_id) REFERENCES sessions(id)
+);

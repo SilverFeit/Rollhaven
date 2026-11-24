@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Coins, Dices, Disc3, HelpCircle, Plus, RotateCw, Sparkles, Trash2 } from 'lucide-react'
+import { Coins, Dices, Disc3, HelpCircle, LayoutGrid, Plus, RotateCw, Sparkles, Trash2 } from 'lucide-react'
 import { CoinDetail, DiceDetail, Magic8Detail, RollBroadcast, WheelDetail } from '../types'
 import { DicePhysicsArena } from './DicePhysicsArena'
 import { PeonzaArenaCanvas } from './PeonzaArenaCanvas'
-import { unlockHaptics } from '../lib/haptics'
+import { triggerGestureHaptic } from '../lib/haptics'
 
 interface DecisionSetsProps {
   onRoll: (payload: Record<string, unknown>) => void
@@ -48,6 +48,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
   asDM = false,
 }) => {
   const [activeTab, setActiveTab] = useState<SetTab>('DICE')
+  const [showAllSets, setShowAllSets] = useState(false)
 
   // Set 1: Dice state + 1:1 physical arena hold-to-shake state
   const [diceCount, setDiceCount] = useState(2)
@@ -127,7 +128,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
 
   const handleDieBtnDown = (sides: number, e: React.PointerEvent<HTMLButtonElement>) => {
     if (disabled) return
-    unlockHaptics()
+    triggerGestureHaptic('tap')
     e.currentTarget.setPointerCapture(e.pointerId)
     setSelectedSides(sides)
     activeHoldSidesRef.current = sides
@@ -146,6 +147,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
     activeHoldSidesRef.current = null
     setHoldingDiceBtn(false)
     if (!disabled) {
+      triggerGestureHaptic('throw')
       triggerDice(sides)
     }
   }
@@ -166,6 +168,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
   }
 
   const triggerCoin = () => {
+    triggerGestureHaptic('throw')
     setCoinAnimating(true)
     onRoll({ type: 'COIN', as_dm: asDM })
     window.setTimeout(() => setCoinAnimating(false), 1100)
@@ -173,6 +176,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
 
   const triggerMagic8 = (e?: React.FormEvent) => {
     if (e) e.preventDefault()
+    triggerGestureHaptic('throw')
     setBallShaking(true)
     onRoll({
       type: 'MAGIC_8_BALL',
@@ -185,10 +189,12 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
 
   const triggerSpinner = () => {
     void targetOwnerID
+    triggerGestureHaptic('throw')
     onRoll({ type: 'SPINNER', faces: spinnerFaces, as_dm: asDM })
   }
 
   const triggerWheel = () => {
+    triggerGestureHaptic('throw')
     onRoll({ type: 'WHEEL', options: wheelOptions, as_dm: asDM })
   }
 
@@ -208,30 +214,50 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
 
   return (
     <div className="rounded-2xl border border-violet-500/25 bg-[#120d22]/85 p-3.5 sm:p-5 space-y-4">
-      {/* Decision Set Selector Tabs */}
-      <div className="grid grid-cols-5 gap-1.5 bg-[#090712]/80 p-1.5 rounded-xl border border-violet-500/20">
-        {tabs.map((t) => {
-          const active = activeTab === t.id
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setActiveTab(t.id)}
-              className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1.5 rounded-lg text-[11px] sm:text-xs font-semibold transition ${
-                active
-                  ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-md shadow-violet-900/50'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-              }`}
-            >
-              {t.icon}
-              <span className="truncate">{t.label}</span>
-            </button>
-          )
-        })}
+      {/* Decision Set Selector Tabs + optional DM All-in-One Toggle */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex-1 min-w-[260px] grid grid-cols-5 gap-1.5 bg-[#090712]/80 p-1.5 rounded-xl border border-violet-500/20">
+          {tabs.map((t) => {
+            const active = !showAllSets && activeTab === t.id
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => {
+                  setShowAllSets(false)
+                  setActiveTab(t.id)
+                }}
+                className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1.5 rounded-lg text-[11px] sm:text-xs font-semibold transition ${
+                  active
+                    ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-md shadow-violet-900/50'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                }`}
+              >
+                {t.icon}
+                <span className="truncate">{t.label}</span>
+              </button>
+            )
+          })}
+        </div>
+        {asDM && (
+          <button
+            type="button"
+            onClick={() => setShowAllSets((s) => !s)}
+            className={`px-3 py-2.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition shrink-0 ${
+              showAllSets
+                ? 'bg-amber-500 text-slate-950 border-amber-400'
+                : 'bg-[#090712]/80 text-violet-200 border-violet-500/30 hover:border-amber-400/50'
+            }`}
+            title="Mostrar o agrupar los 5 objetos de decisión"
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+            {showAllSets ? 'Ver por Pestañas' : 'Ver los 5 Sets'}
+          </button>
+        )}
       </div>
 
       {/* SET 1: POLYHEDRAL DICE */}
-      {activeTab === 'DICE' && (
+      {(showAllSets || activeTab === 'DICE') && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 bg-[#090712]/60 p-3 rounded-xl border border-violet-500/20">
             <div className="flex items-center gap-2">
@@ -374,7 +400,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
       )}
 
       {/* SET 2: REALISTIC PHYSICS COIN */}
-      {activeTab === 'COIN' && (
+      {(showAllSets || activeTab === 'COIN') && (
         <div className="flex flex-col items-center text-center py-3 space-y-4">
           <div
             className={`w-28 h-28 rounded-full flex items-center justify-center border-4 shadow-xl transition ${
@@ -413,7 +439,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
       )}
 
       {/* SET 3: MAGIC 8 BALL */}
-      {activeTab === 'MAGIC_8_BALL' && (
+      {(showAllSets || activeTab === 'MAGIC_8_BALL') && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 bg-[#090712]/70 p-3 rounded-xl border border-violet-500/20">
             <span className="text-xs text-slate-300 font-medium">Modo de Oráculo:</span>
@@ -490,7 +516,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
       )}
 
       {/* SET 4: PEONZA 3D EN PERSPECTIVA CON REBOTES (4-12 CARAS) */}
-      {activeTab === 'SPINNER' && (
+      {(showAllSets || activeTab === 'SPINNER') && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
           <PeonzaArenaCanvas
             faces={spinnerFaces}
@@ -567,7 +593,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
       )}
 
       {/* SET 5: RULETA DE DECISIÓN */}
-      {activeTab === 'WHEEL' && (
+      {(showAllSets || activeTab === 'WHEEL') && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
           <div className="flex flex-col items-center space-y-3">
             <div className="relative w-56 h-56 flex items-center justify-center">

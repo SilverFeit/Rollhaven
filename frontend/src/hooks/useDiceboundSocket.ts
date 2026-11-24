@@ -6,10 +6,11 @@ const STORAGE_PLAYER_ID_KEY = 'rollhaven_player_id'
 export interface UseDiceboundOptions {
   isDM?: boolean
   dmPIN?: string
+  enabled?: boolean
 }
 
 export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
-  const { isDM = false, dmPIN = '' } = options
+  const { isDM = false, dmPIN = '', enabled = true } = options
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null)
   const [connected, setConnected] = useState(false)
   const [playerID, setPlayerID] = useState<string>(() => localStorage.getItem(STORAGE_PLAYER_ID_KEY) || '')
@@ -37,7 +38,7 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
   }, [])
 
   const connect = useCallback(() => {
-    if (!mountedRef.current) return
+    if (!mountedRef.current || !enabled) return
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return
     }
@@ -56,13 +57,13 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
     wsRef.current = ws
 
     ws.onopen = () => {
-      if (!mountedRef.current) return
+      if (!mountedRef.current || wsRef.current !== ws) return
       setConnected(true)
       setErrorMsg(null)
     }
 
     ws.onmessage = (ev) => {
-      if (!mountedRef.current) return
+      if (!mountedRef.current || wsRef.current !== ws) return
       try {
         const msg = JSON.parse(ev.data) as WSMessage<any>
         switch (msg.event) {
@@ -105,7 +106,7 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
     }
 
     ws.onclose = () => {
-      if (!mountedRef.current) return
+      if (!mountedRef.current || wsRef.current !== ws) return
       setConnected(false)
       wsRef.current = null
       if (reconnectTimerRef.current) {
@@ -117,24 +118,29 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
     }
 
     ws.onerror = () => {
-      ws.close()
+      if (wsRef.current === ws) {
+        ws.close()
+      }
     }
-  }, [isDM, dmPIN])
+  }, [isDM, dmPIN, enabled])
 
   useEffect(() => {
     mountedRef.current = true
-    connect()
+    if (enabled) {
+      connect()
+    }
     return () => {
       mountedRef.current = false
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current)
       }
       if (wsRef.current) {
-        wsRef.current.close()
+        const old = wsRef.current
         wsRef.current = null
+        old.close()
       }
     }
-  }, [connect])
+  }, [connect, enabled])
 
   const clearSession = useCallback(() => {
     localStorage.removeItem(STORAGE_PLAYER_ID_KEY)

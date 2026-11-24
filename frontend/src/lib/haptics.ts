@@ -1,37 +1,48 @@
-// Cross-platform tactile/haptic feedback helper for Rollhaven:
-// 1. Android / Web Vibration API (`navigator.vibrate`)
-// 2. iOS Safari 17.4+ native Taptic Engine (`<input type="checkbox" switch />` via label click)
-// 3. Subtle low-frequency WebAudio sub-bass thud unlocked on user gesture so every device gets tactile feedback
+// Cross-platform tactile & hardware vibration engine for Rollhaven:
+// 1. Android / Chromium Vibration API (`navigator.vibrate`) with motor spin-up safe durations (>= 48ms)
+//    and non-cancelling lock window so rapid collisions don't cancel in-flight pulses.
+// 2. iOS Safari 17.4+ native Taptic Engine (`<input type="checkbox" switch />` clicked synchronously
+//    during user gestures and within active interaction windows, without `pointer-events: none`).
+// 3. Subtle low-frequency WebAudio sub-bass thud unlocked on user gesture.
 
 let audioCtx: AudioContext | null = null
-let lastLightAt = 0
-let lastMediumAt = 0
+let lastVibrateAt = 0
+let lastIOSTapticAt = 0
 let iosLabelEl: HTMLLabelElement | null = null
 
-function ensureIOSSwitchHook() {
-  if (typeof document === 'undefined' || iosLabelEl) return
+function ensureIOSSwitchHook(): HTMLLabelElement | null {
+  if (typeof document === 'undefined') return null
+  if (iosLabelEl && document.body.contains(iosLabelEl)) return iosLabelEl
   try {
     const wrap = document.createElement('div')
+    // Must stay technically visible/interactive (no display:none, no pointer-events:none)
+    // so iOS WebKit fires the native Taptic Engine when label.click() is invoked.
     wrap.style.cssText =
-      'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden;'
+      'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:0.01;overflow:hidden;z-index:-1;'
     wrap.setAttribute('aria-hidden', 'true')
 
     const input = document.createElement('input')
     input.type = 'checkbox'
     input.id = 'rollhaven-ios-haptic-switch'
     input.setAttribute('switch', '')
+    input.tabIndex = -1
 
     const label = document.createElement('label')
     label.htmlFor = input.id
-    label.textContent = 'haptic'
+    label.textContent = 'h'
 
     wrap.appendChild(input)
     wrap.appendChild(label)
     document.body.appendChild(wrap)
     iosLabelEl = label
+    return label
   } catch {
-    // Ignore if DOM isn't ready
+    return null
   }
+}
+
+export function supportsHardwareVibration(): boolean {
+  return typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function'
 }
 
 export function unlockHaptics(): void {
@@ -41,15 +52,56 @@ export function unlockHaptics(): void {
     const Ctx =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-    if (!Ctx) return
-    if (!audioCtx) {
-      audioCtx = new Ctx()
-    }
-    if (audioCtx.state === 'suspended') {
-      void audioCtx.resume()
+    if (Ctx) {
+      if (!audioCtx) {
+        audioCtx = new Ctx()
+      }
+      if (audioCtx.state === 'suspended') {
+        void audioCtx.resume()
+      }
     }
   } catch {
     // AudioContext optional
+  }
+}
+
+// Synchronous gesture-scoped haptic: call directly inside pointerdown/pointermove/pointerup/click
+// so iOS Safari Taptic switch & Android Chromium user-activation vibration fire reliably.
+export function triggerGestureHaptic(pattern: 'tap' | 'shake' | 'throw' = 'tap'): void {
+  unlockHaptics()
+  const now = performance.now()
+
+  if (pattern === 'shake' && now - lastIOSTapticAt < 95) {
+    return
+  }
+  lastIOSTapticAt = now
+
+  try {
+    const lbl = ensureIOSSwitchHook()
+    lbl?.click()
+  } catch {
+    // Ignore iOS switch fallback errors
+  }
+
+  try {
+    if (supportsHardwareVibration()) {
+      if (pattern === 'throw') {
+        lastVibrateAt = now + 260
+        navigator.vibrate([55, 65, 50, 75, 45])
+      } else if (pattern === 'shake') {
+        if (now >= lastVibrateAt) {
+          lastVibrateAt = now + 95
+          navigator.vibrate(48)
+        }
+      } else {
+        if (now >= lastVibrateAt) {
+          lastVibrateAt = now + 70
+          navigator.vibrate(40)
+        }
+      }
+    }
+  } catch {
+    // Ignore vibrate errors
   }
 }
 
@@ -85,23 +137,21 @@ export function triggerBounceHaptic(intensity: 'light' | 'medium' | 'heavy' = 'l
   if (typeof window === 'undefined') return
 
   const now = performance.now()
-  if (intensity === 'light') {
-    if (now - lastLightAt < 45) return
-    lastLightAt = now
-  } else if (intensity === 'medium') {
-    if (now - lastMediumAt < 34) return
-    lastMediumAt = now
-  }
 
-  // 1. Android / Chromium Vibration API
+  // 1. Android / Chromium Vibration API with spin-up safe duration & non-cancelling window
   try {
-    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+    if (supportsHardwareVibration()) {
       if (intensity === 'heavy') {
-        navigator.vibrate([28, 30, 52])
-      } else if (intensity === 'medium') {
-        navigator.vibrate(24)
-      } else {
-        navigator.vibrate(14)
+        lastVibrateAt = now + 220
+        navigator.vibrate([65, 50, 90])
+      } else if (now >= lastVibrateAt) {
+        if (intensity === 'medium') {
+          lastVibrateAt = now + 105
+          navigator.vibrate(68)
+        } else {
+          lastVibrateAt = now + 95
+          navigator.vibrate(48)
+        }
       }
     }
   } catch {
@@ -110,9 +160,10 @@ export function triggerBounceHaptic(intensity: 'light' | 'medium' | 'heavy' = 'l
 
   // 2. iOS Safari 17.4+ native Taptic Engine switch toggle
   try {
-    ensureIOSSwitchHook()
-    if (iosLabelEl && (intensity === 'medium' || intensity === 'heavy')) {
-      iosLabelEl.click()
+    if (now - lastIOSTapticAt >= (intensity === 'heavy' ? 30 : 85)) {
+      lastIOSTapticAt = now
+      const lbl = ensureIOSSwitchHook()
+      lbl?.click()
     }
   } catch {
     // Ignore iOS switch errors
