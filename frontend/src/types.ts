@@ -421,6 +421,7 @@ export interface StateSnapshot {
   current_turn_index: number
   active_player_id: string
   current_turn_rolls: RollBroadcast[]
+  recent_rolls?: RollBroadcast[]
   last_result?: RollBroadcast
   action_log: ActionLogEntry[]
   strict_turn_rolls: boolean

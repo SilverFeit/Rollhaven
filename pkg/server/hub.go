@@ -26,24 +26,47 @@ type WSMessage struct {
 	Payload  json.RawMessage `json:"payload,omitempty"`
 }
 
+// RollSource describes what ability, weapon, spell, or monster action triggered a roll.
+type RollSource struct {
+	Kind     string `json:"kind"`
+	Name     string `json:"name"`
+	Subtitle string `json:"subtitle,omitempty"`
+}
+
+// InteractiveRollAction defines an executable follow-up button rendered inside the chat/roll tracker.
+type InteractiveRollAction struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"` // SAVE | DAMAGE | CHECK | HEAL
+	Label      string `json:"label"`
+	Ability    string `json:"ability,omitempty"`
+	Skill      string `json:"skill,omitempty"`
+	DC         int    `json:"dc,omitempty"`
+	Formula    string `json:"formula,omitempty"`
+	DamageType string `json:"damage_type,omitempty"`
+}
+
 // RollBroadcast represents a single roll/decision result transmitted to authorized connected screens.
 type RollBroadcast struct {
-	ID            int64     `json:"id"`
-	Timestamp     time.Time `json:"timestamp"`
-	PlayerID      string    `json:"player_id"`
-	PlayerName    string    `json:"player_name"`
-	PlayerColor   string    `json:"player_color"`
-	RaceIcon      string    `json:"race_icon"`
-	SetType       string    `json:"set_type"`
-	ResultSummary string    `json:"result_summary"`
-	Detail        any       `json:"detail"`
-	Visibility    string    `json:"visibility,omitempty"`
-	CommandID     string    `json:"command_id,omitempty"`
-	Masked        bool      `json:"masked,omitempty"`
-	IsCritical    bool      `json:"is_critical,omitempty"`
-	IsFumble      bool      `json:"is_fumble,omitempty"`
-	IsEdge        bool      `json:"is_edge,omitempty"`
-	OutOfTurn     bool      `json:"out_of_turn,omitempty"`
+	ID                 int64                   `json:"id"`
+	Timestamp          time.Time               `json:"timestamp"`
+	PlayerID           string                  `json:"player_id"`
+	PlayerName         string                  `json:"player_name"`
+	PlayerColor        string                  `json:"player_color"`
+	RaceIcon           string                  `json:"race_icon"`
+	SetType            string                  `json:"set_type"`
+	ResultSummary      string                  `json:"result_summary"`
+	Detail             any                     `json:"detail"`
+	Visibility         string                  `json:"visibility,omitempty"`
+	CommandID          string                  `json:"command_id,omitempty"`
+	Masked             bool                    `json:"masked,omitempty"`
+	IsCritical         bool                    `json:"is_critical,omitempty"`
+	IsFumble           bool                    `json:"is_fumble,omitempty"`
+	IsEdge             bool                    `json:"is_edge,omitempty"`
+	OutOfTurn          bool                    `json:"out_of_turn,omitempty"`
+	Source             *RollSource             `json:"source,omitempty"`
+	InteractiveActions []InteractiveRollAction `json:"interactive_actions,omitempty"`
+	TargetDC           int                     `json:"target_dc,omitempty"`
+	SaveOutcome        string                  `json:"save_outcome,omitempty"`
 }
 
 // Combatant unifies players and initiative-tracked monsters into a single turn tracker list.
@@ -86,6 +109,7 @@ type StateSnapshot struct {
 	CurrentTurnIndex int                     `json:"current_turn_index"`
 	ActivePlayerID   string                  `json:"active_player_id"`
 	CurrentTurnRolls []RollBroadcast         `json:"current_turn_rolls"`
+	RecentRolls      []RollBroadcast         `json:"recent_rolls"`
 	LastResult       *RollBroadcast          `json:"last_result,omitempty"`
 	ActionLog        []store.ActionLogEntry  `json:"action_log"`
 	StrictTurnRolls  bool                    `json:"strict_turn_rolls"`
@@ -123,6 +147,7 @@ type Hub struct {
 	sequence         int64
 	clients          map[*wsClient]struct{}
 	currentTurnRolls []RollBroadcast
+	recentRolls      []RollBroadcast
 	lastResult       *RollBroadcast
 	strictTurnRolls  bool
 	strictTurnMove   bool
@@ -330,6 +355,8 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 	seq := h.sequence
 	rawRolls := make([]RollBroadcast, len(h.currentTurnRolls))
 	copy(rawRolls, h.currentTurnRolls)
+	rawRecent := make([]RollBroadcast, len(h.recentRolls))
+	copy(rawRecent, h.recentRolls)
 	strictRolls := h.strictTurnRolls
 	strictMove := h.strictTurnMove
 	h.mu.RUnlock()
@@ -340,10 +367,19 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 			filteredRolls = append(filteredRolls, viewRB)
 		}
 	}
+	filteredRecent := make([]RollBroadcast, 0, len(rawRecent))
+	for _, rb := range rawRecent {
+		if viewRB, ok := filterRollForViewer(rb, viewerID, isDM); ok {
+			filteredRecent = append(filteredRecent, viewRB)
+		}
+	}
 
 	var lastCopy *RollBroadcast
 	if len(filteredRolls) > 0 {
 		cp := filteredRolls[len(filteredRolls)-1]
+		lastCopy = &cp
+	} else if len(filteredRecent) > 0 {
+		cp := filteredRecent[len(filteredRecent)-1]
 		lastCopy = &cp
 	}
 
@@ -367,6 +403,7 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 		CurrentTurnIndex: turnIdx,
 		ActivePlayerID:   activeID,
 		CurrentTurnRolls: filteredRolls,
+		RecentRolls:      filteredRecent,
 		LastResult:       lastCopy,
 		ActionLog:        logs,
 		StrictTurnRolls:  strictRolls,
@@ -634,16 +671,20 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 
 	case "ROLL_ACTION":
 		var req struct {
-			Type         string   `json:"type"`
-			DiceNotation string   `json:"dice_notation"`
-			StrictYesNo  bool     `json:"strict_yes_no"`
-			Question     string   `json:"question"`
-			Faces        []string `json:"faces"`
-			Options      []string `json:"options"`
-			Visibility   string   `json:"visibility"`
-			CommandID    string   `json:"command_id"`
-			AsDM         bool     `json:"as_dm"`
-			PIN          string   `json:"pin"`
+			Type               string                  `json:"type"`
+			DiceNotation       string                  `json:"dice_notation"`
+			StrictYesNo        bool                    `json:"strict_yes_no"`
+			Question           string                  `json:"question"`
+			Faces              []string                `json:"faces"`
+			Options            []string                `json:"options"`
+			Visibility         string                  `json:"visibility"`
+			CommandID          string                  `json:"command_id"`
+			AsDM               bool                    `json:"as_dm"`
+			PIN                string                  `json:"pin"`
+			Source             *RollSource             `json:"source"`
+			InteractiveActions []InteractiveRollAction `json:"interactive_actions"`
+			TargetDC           int                     `json:"target_dc"`
+			UpdateInitiative   bool                    `json:"update_initiative"`
 		}
 		if err := json.Unmarshal(msg.Payload, &req); err != nil {
 			h.sendError(ctx, c, "Payload ROLL_ACTION inválido")
@@ -658,7 +699,12 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 		if !h.ensureNotRevoked(ctx, c) {
 			return
 		}
-		h.handleRollAction(ctx, c, msg.PlayerID, req.Type, req.DiceNotation, req.StrictYesNo, req.Question, req.Faces, req.Options, req.Visibility, req.CommandID, req.AsDM)
+		h.handleRollAction(ctx, c, msg.PlayerID, req.Type, req.DiceNotation, req.StrictYesNo, req.Question, req.Faces, req.Options, req.Visibility, req.CommandID, req.AsDM, rollActionExtras{
+			Source:             req.Source,
+			InteractiveActions: req.InteractiveActions,
+			TargetDC:           req.TargetDC,
+			UpdateInitiative:   req.UpdateInitiative,
+		})
 
 	case "END_TURN":
 		if !h.ensureNotRevoked(ctx, c) {
@@ -910,6 +956,13 @@ func (h *Hub) broadcastResultFiltered(rb RollBroadcast) {
 	}
 }
 
+type rollActionExtras struct {
+	Source             *RollSource
+	InteractiveActions []InteractiveRollAction
+	TargetDC           int
+	UpdateInitiative   bool
+}
+
 func (h *Hub) handleRollAction(
 	ctx context.Context,
 	c *wsClient,
@@ -920,7 +973,12 @@ func (h *Hub) handleRollAction(
 	visibility string,
 	commandID string,
 	asDM bool,
+	extrasOpt ...rollActionExtras,
 ) {
+	var extras rollActionExtras
+	if len(extrasOpt) > 0 {
+		extras = extrasOpt[0]
+	}
 	clientPID, isDM := h.getClientIdentity(c)
 	commandID = strings.TrimSpace(commandID)
 	if commandID != "" {
@@ -974,6 +1032,7 @@ func (h *Hub) handleRollAction(
 	var summary string
 	var detail any
 	var isCrit, isFumble, isEdge bool
+	var saveOutcome string
 
 	switch strings.ToUpper(strings.TrimSpace(setType)) {
 	case "DICE":
@@ -990,6 +1049,33 @@ func (h *Hub) handleRollAction(
 			summary += " (¡CRÍTICO NAT 20!)"
 		} else if isFumble {
 			summary += " (¡PIFIA NAT 1!)"
+		}
+		if extras.TargetDC > 0 {
+			if res.Total >= extras.TargetDC {
+				saveOutcome = "SUCCESS"
+				summary += fmt.Sprintf(" [ÉXITO vs CD %d]", extras.TargetDC)
+			} else {
+				saveOutcome = "FAILURE"
+				summary += fmt.Sprintf(" [FALLO vs CD %d]", extras.TargetDC)
+			}
+		}
+		if extras.UpdateInitiative && pid != "" && pid != "dm" {
+			_ = h.store.SetPlayerInitiative(pid, res.Total)
+			summary += " (Iniciativa actualizada)"
+		}
+
+	case "ABILITY_CARD":
+		srcName := "Habilidad"
+		if extras.Source != nil && strings.TrimSpace(extras.Source.Name) != "" {
+			srcName = extras.Source.Name
+		}
+		summary = fmt.Sprintf("%s activado", srcName)
+		if extras.Source != nil && extras.Source.Subtitle != "" {
+			summary = fmt.Sprintf("%s — %s", srcName, extras.Source.Subtitle)
+		}
+		detail = map[string]any{
+			"source":              extras.Source,
+			"interactive_actions": extras.InteractiveActions,
 		}
 
 	case "COIN":
@@ -1048,27 +1134,35 @@ func (h *Hub) handleRollAction(
 	}
 
 	rb := RollBroadcast{
-		ID:            logEntry.ID,
-		Timestamp:     time.Now().UTC(),
-		PlayerID:      pid,
-		PlayerName:    playerName,
-		PlayerColor:   playerColor,
-		RaceIcon:      raceIcon,
-		SetType:       strings.ToUpper(setType),
-		ResultSummary: summary,
-		Detail:        detail,
-		Visibility:    vis,
-		CommandID:     commandID,
-		IsCritical:    isCrit,
-		IsFumble:      isFumble,
-		IsEdge:        isEdge,
-		OutOfTurn:     outOfTurn,
+		ID:                 logEntry.ID,
+		Timestamp:          time.Now().UTC(),
+		PlayerID:           pid,
+		PlayerName:         playerName,
+		PlayerColor:        playerColor,
+		RaceIcon:           raceIcon,
+		SetType:            strings.ToUpper(setType),
+		ResultSummary:      summary,
+		Detail:             detail,
+		Visibility:         vis,
+		CommandID:          commandID,
+		IsCritical:         isCrit,
+		IsFumble:           isFumble,
+		IsEdge:             isEdge,
+		OutOfTurn:          outOfTurn,
+		Source:             extras.Source,
+		InteractiveActions: extras.InteractiveActions,
+		TargetDC:           extras.TargetDC,
+		SaveOutcome:        saveOutcome,
 	}
 
 	h.store.SaveCommandIdempotency(commandID, pid, "ROLL_ACTION", rb)
 
 	h.mu.Lock()
 	h.currentTurnRolls = append(h.currentTurnRolls, rb)
+	h.recentRolls = append(h.recentRolls, rb)
+	if len(h.recentRolls) > 40 {
+		h.recentRolls = h.recentRolls[len(h.recentRolls)-40:]
+	}
 	h.lastResult = &rb
 	h.mu.Unlock()
 

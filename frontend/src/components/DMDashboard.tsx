@@ -46,11 +46,13 @@ import {
 import { useDiceboundSocket } from '../hooks/useDiceboundSocket'
 import { MapEntityKind, SceneCard } from '../types'
 import { DND_CONDITIONS, SOUNDBOARD_CLIPS, calculateEncounterDifficulty, crToXP, playTabletopSound } from '../lib/srdCompendiumAndGenerators'
+import { ActionChatTracker } from './ActionChatTracker'
 import { CertificateModal } from './CertificateModal'
 import { CharacterWizard } from './CharacterWizard'
 import { CompanionHub } from './CompanionHub'
 import { DecisionSets } from './DecisionSets'
 import { InitiativeOverlayTracker } from './InitiativeOverlayTracker'
+import { CompendiumMonsterData, MonsterSheetDrawer } from './MonsterSheetDrawer'
 import { RaceSVG } from './RaceIcons'
 import { DMSelection, TacticalMapCanvas } from './TacticalMapCanvas'
 import { TurnBanner } from './TurnBanner'
@@ -202,6 +204,8 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   const [entityTacticalOpenID, setEntityTacticalOpenID] = useState<string | null>(null)
   const [wizardTarget, setWizardTarget] = useState<{ userID?: string; playerID?: string; name?: string } | null>(null)
   const [dmFocusTarget, setDmFocusTarget] = useState<{ x: number; y: number; tick: number } | null>(null)
+  const [monsterDrawerOpen, setMonsterDrawerOpen] = useState(false)
+  const [selectedMonsterCtx, setSelectedMonsterCtx] = useState<CompendiumMonsterData | null>(null)
 
   useEffect(() => {
     fetch('/api/v1/dm/status')
@@ -507,14 +511,24 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onGoPlayerView}
-            className="px-3.5 py-2 rounded-xl bg-violet-900/50 hover:bg-violet-800/60 border border-violet-500/30 text-xs font-semibold text-violet-200 flex items-center gap-1.5 transition"
-          >
-            <ShieldCheck className="w-4 h-4 text-amber-300" />
-            Abrir Vista de Jugador
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMonsterDrawerOpen((v) => !v)}
+              className="px-3.5 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900/60 border border-rose-500/40 text-xs font-bold text-rose-200 flex items-center gap-1.5 transition"
+            >
+              <Skull className="w-4 h-4 text-rose-400" />
+              Bestiario / Hojas Monstruos
+            </button>
+            <button
+              type="button"
+              onClick={onGoPlayerView}
+              className="px-3.5 py-2 rounded-xl bg-violet-900/50 hover:bg-violet-800/60 border border-violet-500/30 text-xs font-semibold text-violet-200 flex items-center gap-1.5 transition"
+            >
+              <ShieldCheck className="w-4 h-4 text-amber-300" />
+              Abrir Vista de Jugador
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1022,8 +1036,24 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
             />
           </div>
 
-          {/* Global Audit Log + Private DM Notepad */}
+          {/* Interactive Action Tracker + Global Audit Log + Private DM Notepad */}
           <div className="lg:col-span-5 space-y-5">
+            {snapshot && (
+              <section className="rounded-2xl border border-violet-500/30 bg-[#120d22]/90 p-4 h-[360px] flex flex-col overflow-hidden">
+                <ActionChatTracker
+                  rolls={snapshot.recent_rolls ?? snapshot.current_turn_rolls ?? []}
+                  messages={snapshot.chat_messages ?? []}
+                  players={snapshot.players}
+                  localPlayerID="dm"
+                  isDM
+                  dmPIN={verifiedPIN}
+                  selectedMonster={selectedMonsterCtx}
+                  onRollAction={(payload) => sendMessage('ROLL_ACTION', { ...payload, pin: verifiedPIN })}
+                  onSendChat={(payload) => sendMessage('CHAT_SEND', payload)}
+                />
+              </section>
+            )}
+
             <section className="rounded-2xl border border-violet-500/25 bg-[#120d22]/85 p-4 space-y-3">
               <h2 className="text-sm font-bold text-amber-200 flex items-center gap-2">
                 <ScrollText className="w-4 h-4 text-violet-400" />
@@ -2070,7 +2100,13 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                   localPlayerID=""
                   roundNumber={snapshot.session.round_number ?? 1}
                   isDM
-                  onSelectCombatant={(cb) => setDmFocusTarget({ x: cb.token_x, y: cb.token_y, tick: Date.now() })}
+                  onSelectCombatant={(cb) => {
+                    setDmFocusTarget({ x: cb.token_x, y: cb.token_y, tick: Date.now() })
+                    if (cb.kind === 'monster') {
+                      setSelectedTarget({ kind: 'entity', id: cb.id })
+                      setMonsterDrawerOpen(true)
+                    }
+                  }}
                   onDMPrevTurn={() => sendDMOverride({ action: 'PREV_TURN' })}
                   onDMNextTurn={() => sendDMOverride({ action: 'NEXT_TURN' })}
                 />
@@ -2089,6 +2125,10 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                 dmMode={dmMapMode}
                 selectedDMTarget={selectedTarget}
                 focusTarget={dmFocusTarget}
+                onEntityClick={(ent) => {
+                  setSelectedTarget({ kind: 'entity', id: ent.id })
+                  setMonsterDrawerOpen(true)
+                }}
               onMoveToken={(pid, x, y) =>
                 sendDMOverride({ action: 'MOVE_ANY_TOKEN', target_player_id: pid, target_x: x, target_y: y })
               }
@@ -2149,6 +2189,19 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
         targetUserID={wizardTarget?.userID}
         targetPlayerID={wizardTarget?.playerID}
         defaultName={wizardTarget?.name || ''}
+      />
+      <MonsterSheetDrawer
+        open={monsterDrawerOpen}
+        onClose={() => setMonsterDrawerOpen(false)}
+        selectedEntity={
+          selectedTarget?.kind === 'entity'
+            ? snapshot?.map_entities?.find((e) => e.id === selectedTarget.id) || null
+            : null
+        }
+        dmPIN={verifiedPIN}
+        onRollAction={(payload) => sendMessage('ROLL_ACTION', { ...payload, pin: verifiedPIN })}
+        onDMOverride={sendDMOverride}
+        onSelectMonsterContext={setSelectedMonsterCtx}
       />
     </div>
   )
