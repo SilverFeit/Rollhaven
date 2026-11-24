@@ -158,6 +158,15 @@ export const TurnBanner: React.FC<TurnBannerProps> = ({
                     <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 font-semibold">
                       {latestRoll.set_type.replace('_', ' ')}
                     </span>
+                    {latestRoll.visibility && latestRoll.visibility !== 'PUBLIC' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200 font-semibold">
+                        {latestRoll.visibility === 'GM_ONLY'
+                          ? 'Ciega al GM'
+                          : latestRoll.visibility === 'ROLLER_AND_GM'
+                            ? 'Privada (Autor+GM)'
+                            : 'Personal'}
+                      </span>
+                    )}
                     {latestRoll.out_of_turn && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
                         Fuera de turno

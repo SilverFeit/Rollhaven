@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from 'react'
-import { Backpack, Dices, FileText, LogOut, Map as MapIcon, NotebookPen } from 'lucide-react'
+import { Backpack, Dices, FileText, LogOut, Map as MapIcon, MessageSquare, NotebookPen, ShieldAlert } from 'lucide-react'
 import { useDiceboundSocket } from './hooks/useDiceboundSocket'
 import { PlayerOnboarding } from './components/PlayerOnboarding'
 import { TurnBanner } from './components/TurnBanner'
 import { DecisionSets } from './components/DecisionSets'
+import { CompanionHub } from './components/CompanionHub'
 import { CharacterSheetAndRaceTab, InventoryTab, NotesTab } from './components/PlayerTabs'
 import { TacticalMapCanvas } from './components/TacticalMapCanvas'
 import { DMDashboard } from './components/DMDashboard'
 import { RaceSVG } from './components/RaceIcons'
 import { AppFooter } from './components/AppFooter'
 
-type PlayerTab = 'DECISIONS' | 'MAP' | 'SHEET' | 'INVENTORY' | 'NOTES'
+type PlayerTab = 'DECISIONS' | 'MAP' | 'COMPANION' | 'SHEET' | 'INVENTORY' | 'NOTES'
 
 const PlayerWorkspace: React.FC = () => {
   const {
@@ -19,9 +20,12 @@ const PlayerWorkspace: React.FC = () => {
     playerID,
     lastBroadcast,
     errorMsg,
+    noteConflict,
+    revoked,
     sendMessage,
     clearSession,
     clearError,
+    clearNoteConflict,
   } = useDiceboundSocket()
 
   const [tab, setTab] = useState<PlayerTab>('DECISIONS')
@@ -111,6 +115,16 @@ const PlayerWorkspace: React.FC = () => {
 
           <button
             type="button"
+            onClick={() => setTab('COMPANION')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition ${
+              tab === 'COMPANION' ? 'bg-violet-600 text-white' : 'bg-[#120d22] text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" /> Chat &amp; Diarios
+          </button>
+
+          <button
+            type="button"
             onClick={() => setTab('SHEET')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition ${
               tab === 'SHEET' ? 'bg-violet-600 text-white' : 'bg-[#120d22] text-slate-400 hover:text-slate-200'
@@ -142,6 +156,22 @@ const PlayerWorkspace: React.FC = () => {
       </header>
 
       <main className="max-w-4xl mx-auto px-3.5 pt-4 space-y-4">
+        {(revoked || currentPlayer.membership_status === 'REVOKED') && (
+          <div className="rounded-xl bg-rose-950/85 border border-rose-500/60 px-4 py-3 text-xs text-rose-100 flex flex-wrap items-center justify-between gap-2">
+            <span className="flex items-center gap-2 font-semibold">
+              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+              Tu membresía en esta campaña fue revocada por el Dungeon Master. Solo lectura temporal.
+            </span>
+            <button
+              type="button"
+              onClick={clearSession}
+              className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold"
+            >
+              Cambiar personaje
+            </button>
+          </div>
+        )}
+
         {errorMsg && (
           <div className="rounded-xl bg-rose-950/70 border border-rose-500/50 px-3.5 py-2.5 text-xs text-rose-200 flex items-center justify-between">
             <span>{errorMsg}</span>
@@ -163,6 +193,7 @@ const PlayerWorkspace: React.FC = () => {
         {tab === 'DECISIONS' && (
           <DecisionSets
             onRoll={(payload) => sendMessage('ROLL_ACTION', payload)}
+            disabled={revoked || currentPlayer.membership_status === 'REVOKED'}
             lastBroadcast={lastBroadcast}
             localPlayerID={playerID}
           />
@@ -179,6 +210,21 @@ const PlayerWorkspace: React.FC = () => {
               onMoveToken={(_pid, x, y) => sendMessage('MOVE_TOKEN', { target_x: x, target_y: y })}
             />
           </div>
+        )}
+
+        {tab === 'COMPANION' && (
+          <CompanionHub
+            campaign={snapshot.active_campaign}
+            activeSession={snapshot.campaign_sessions?.[0]}
+            players={snapshot.players}
+            localPlayerID={playerID}
+            messages={snapshot.chat_messages ?? []}
+            notes={snapshot.campaign_notes ?? []}
+            rollTables={snapshot.roll_tables ?? []}
+            noteConflict={noteConflict}
+            onClearNoteConflict={clearNoteConflict}
+            onSendMessage={(evt, payload) => sendMessage(evt, payload)}
+          />
         )}
 
         {tab === 'SHEET' && (
@@ -203,7 +249,7 @@ const PlayerWorkspace: React.FC = () => {
 
 export function App() {
   const [route, setRoute] = useState<string>(() => window.location.pathname)
-  const [appVersion, setAppVersion] = useState<string>('1.3.0')
+  const [appVersion, setAppVersion] = useState<string>('1.4.0')
   const [appLicense, setAppLicense] = useState<string>('MIT')
 
   useEffect(() => {

@@ -2,33 +2,43 @@ import React, { useEffect, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import {
   AlertTriangle,
+  Archive,
   ArrowLeft,
+  Ban,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Copy,
   Crown,
   DoorOpen,
+  Download,
   Eye,
   EyeOff,
   Flame,
+  FolderPlus,
   Gem,
   GripVertical,
   Hand,
+  HardDrive,
   KeyRound,
   Map as MapIcon,
   MapPin,
   NotebookPen,
+  PauseCircle,
+  PlayCircle,
   RefreshCw,
   ScrollText,
   Shield,
   ShieldCheck,
   Skull,
+  StopCircle,
   Trash2,
   Upload,
   Users,
 } from 'lucide-react'
 import { useDiceboundSocket } from '../hooks/useDiceboundSocket'
 import { MapEntityKind } from '../types'
+import { CompanionHub } from './CompanionHub'
 import { DecisionSets } from './DecisionSets'
 import { RaceSVG } from './RaceIcons'
 import { DMSelection, TacticalMapCanvas } from './TacticalMapCanvas'
@@ -154,6 +164,15 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   const [entityNote, setEntityNote] = useState('AC 15')
   const [entityHidden, setEntityHidden] = useState(false)
   const mapFileRef = useRef<HTMLInputElement | null>(null)
+  const restoreFileRef = useRef<HTMLInputElement | null>(null)
+
+  // Campaign, session & backup controls
+  const [creatingCampaign, setCreatingCampaign] = useState(false)
+  const [newCampName, setNewCampName] = useState('')
+  const [newCampSystem, setNewCampSystem] = useState('D&D 5e / Universal')
+  const [newCampDesc, setNewCampDesc] = useState('')
+  const [newSessionTitle, setNewSessionTitle] = useState('')
+  const [backupStatus, setBackupStatus] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/v1/dm/status')
@@ -200,7 +219,16 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
     return () => window.clearTimeout(timer)
   }, [dmNotes, authorized, verifiedPIN])
 
-  const { snapshot, connected, lastBroadcast, errorMsg, sendMessage, clearError } = useDiceboundSocket({
+  const {
+    snapshot,
+    connected,
+    lastBroadcast,
+    errorMsg,
+    noteConflict,
+    sendMessage,
+    clearError,
+    clearNoteConflict,
+  } = useDiceboundSocket({
     isDM: Boolean(authorized),
     dmPIN: verifiedPIN,
     enabled: Boolean(authorized),
@@ -328,6 +356,92 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
     window.setTimeout(() => setCopiedURL(false), 1800)
   }
 
+  const handleCreateCampaign = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newCampName.trim()) return
+    sendDMOverride({
+      action: 'CREATE_CAMPAIGN',
+      campaign_name: newCampName.trim(),
+      campaign_system: newCampSystem.trim() || 'D&D 5e / Universal',
+      campaign_desc: newCampDesc.trim(),
+    })
+    setNewCampName('')
+    setNewCampDesc('')
+    setCreatingCampaign(false)
+  }
+
+  const handleDownloadProtected = async (url: string, fallbackName: string) => {
+    setBackupStatus('Generando archivo...')
+    try {
+      const res = await fetch(url, {
+        headers: verifiedPIN ? { 'X-DM-PIN': verifiedPIN } : {},
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setBackupStatus(d.error || 'Error generando descarga')
+        return
+      }
+      const blob = await res.blob()
+      const objectURL = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objectURL
+      a.download = fallbackName
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(objectURL)
+      setBackupStatus(`Descargado: ${fallbackName}`)
+    } catch {
+      setBackupStatus('No se pudo descargar el backup')
+    }
+  }
+
+  const handleRestoreFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const ok = window.confirm(
+      `¿Seguro que deseas restaurar "${file.name}"? Esto reemplazará el estado de la campaña actual tras validar su firma SHA-256.`
+    )
+    if (!ok) {
+      if (restoreFileRef.current) restoreFileRef.current.value = ''
+      return
+    }
+    setBackupStatus('Verificando checksum SHA-256 y restaurando...')
+    try {
+      const isJSON = file.name.toLowerCase().endsWith('.json')
+      let res: Response
+      if (isJSON) {
+        const text = await file.text()
+        res = await fetch('/api/v1/campaigns/import', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(verifiedPIN ? { 'X-DM-PIN': verifiedPIN } : {}),
+          },
+          body: text,
+        })
+      } else {
+        const form = new FormData()
+        form.append('file', file)
+        res = await fetch('/api/v1/backups/restore', {
+          method: 'POST',
+          headers: verifiedPIN ? { 'X-DM-PIN': verifiedPIN } : {},
+          body: form,
+        })
+      }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setBackupStatus(data.error || 'Error validando/restaurando backup')
+      } else {
+        setBackupStatus('✓ Campaña y adjuntos restaurados e íntegros')
+      }
+    } catch {
+      setBackupStatus('Error de red al restaurar backup')
+    } finally {
+      if (restoreFileRef.current) restoreFileRef.current.value = ''
+    }
+  }
+
   return (
     <div className="flex-1 bg-[#090712] text-slate-100 pb-10">
       {/* Top DM Header */}
@@ -383,6 +497,147 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
           </div>
         )}
 
+        {/* Row 0: Rollhaven Campaign & Session Lifecycle Bar */}
+        {snapshot && (
+          <section className="rounded-2xl border border-violet-500/25 bg-[#120d22]/85 p-3.5 sm:p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="text-xs font-bold text-amber-200 flex items-center gap-1.5">
+                  <Crown className="w-4 h-4 text-amber-400" />
+                  Campaña Activa:
+                </div>
+                <select
+                  value={snapshot.active_campaign?.id || 'default'}
+                  onChange={(e) => sendDMOverride({ action: 'SWITCH_CAMPAIGN', campaign_id: e.target.value })}
+                  className="px-3 py-1.5 rounded-xl bg-[#090712] border border-violet-500/35 text-xs font-bold text-amber-100"
+                >
+                  {(snapshot.campaigns ?? []).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {c.status === 'ARCHIVED' ? '(Archivada)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#090712] text-violet-300 border border-violet-500/20">
+                  seq #{snapshot.sequence ?? 0}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCreatingCampaign((v) => !v)}
+                  className="px-2.5 py-1.5 rounded-xl bg-violet-600/80 hover:bg-violet-500 text-white text-xs font-bold flex items-center gap-1"
+                >
+                  <FolderPlus className="w-3.5 h-3.5" /> Nueva Campaña
+                </button>
+                {snapshot.active_campaign && snapshot.active_campaign.id !== 'default' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      sendDMOverride({
+                        action: 'ARCHIVE_CAMPAIGN',
+                        campaign_id: snapshot.active_campaign!.id,
+                        archived: snapshot.active_campaign!.status !== 'ARCHIVED',
+                      })
+                    }
+                    className="px-2.5 py-1.5 rounded-xl bg-[#090712] border border-violet-500/30 text-xs text-slate-300 hover:text-amber-200 flex items-center gap-1"
+                  >
+                    <Archive className="w-3.5 h-3.5" />
+                    {snapshot.active_campaign.status === 'ARCHIVED' ? 'Reactivar' : 'Archivar'}
+                  </button>
+                )}
+              </div>
+
+              {/* Campaign Session State Controls */}
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                {snapshot.campaign_sessions?.[0] && (
+                  <span className="px-2.5 py-1 rounded-lg bg-[#090712] border border-violet-500/25 text-slate-300">
+                    {snapshot.campaign_sessions[0].title}:{' '}
+                    <strong
+                      className={
+                        snapshot.campaign_sessions[0].status === 'ACTIVE'
+                          ? 'text-emerald-300'
+                          : snapshot.campaign_sessions[0].status === 'PAUSED'
+                            ? 'text-amber-300'
+                            : 'text-slate-400'
+                      }
+                    >
+                      {snapshot.campaign_sessions[0].status}
+                    </strong>
+                  </span>
+                )}
+                <input
+                  type="text"
+                  value={newSessionTitle}
+                  onChange={(e) => setNewSessionTitle(e.target.value)}
+                  placeholder="Nombre nueva sesión..."
+                  className="w-36 px-2.5 py-1 rounded-lg bg-[#090712] border border-violet-500/25 text-slate-100 placeholder-slate-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    sendDMOverride({ action: 'START_CAMPAIGN_SESSION', session_title: newSessionTitle.trim() })
+                    setNewSessionTitle('')
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600/80 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1"
+                  title="Iniciar nueva sesión preservando historial de campaña"
+                >
+                  <PlayCircle className="w-3.5 h-3.5" /> Nueva Sesión
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendDMOverride({ action: 'PAUSE_CAMPAIGN_SESSION' })}
+                  className="px-2 py-1 rounded-lg bg-[#090712] border border-amber-500/30 text-amber-200 flex items-center gap-1"
+                  title="Pausar sesión actual"
+                >
+                  <PauseCircle className="w-3.5 h-3.5" /> Pausar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendDMOverride({ action: 'CLOSE_CAMPAIGN_SESSION' })}
+                  className="px-2 py-1 rounded-lg bg-[#090712] border border-rose-500/30 text-rose-200 flex items-center gap-1"
+                  title="Cerrar sesión sin borrar notas ni historial"
+                >
+                  <StopCircle className="w-3.5 h-3.5" /> Cerrar
+                </button>
+              </div>
+            </div>
+
+            {creatingCampaign && (
+              <form
+                onSubmit={handleCreateCampaign}
+                className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-2 border-t border-violet-500/20 text-xs"
+              >
+                <input
+                  type="text"
+                  required
+                  value={newCampName}
+                  onChange={(e) => setNewCampName(e.target.value)}
+                  placeholder="Nombre de nueva campaña (ej. Maldición de Strahd)"
+                  className="sm:col-span-4 px-3 py-2 rounded-lg bg-[#090712] border border-violet-500/30 text-slate-100"
+                />
+                <input
+                  type="text"
+                  value={newCampSystem}
+                  onChange={(e) => setNewCampSystem(e.target.value)}
+                  placeholder="Sistema (D&D 5e / Pathfinder / Agnóstico)"
+                  className="sm:col-span-3 px-3 py-2 rounded-lg bg-[#090712] border border-violet-500/30 text-slate-100"
+                />
+                <input
+                  type="text"
+                  value={newCampDesc}
+                  onChange={(e) => setNewCampDesc(e.target.value)}
+                  placeholder="Descripción breve (opcional)"
+                  className="sm:col-span-3 px-3 py-2 rounded-lg bg-[#090712] border border-violet-500/30 text-slate-100"
+                />
+                <button
+                  type="submit"
+                  className="sm:col-span-2 py-2 rounded-lg bg-amber-500 text-slate-950 font-bold"
+                >
+                  Crear Campaña
+                </button>
+              </form>
+            )}
+          </section>
+        )}
+
         {/* Row 1: QR Connection Panel + Initiative & Turn Control */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           {/* QR & LAN Connection Card */}
@@ -429,6 +684,14 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                   {connectedCount} / {players.length} conectados
                 </span>
               </div>
+              <a
+                href={`http://${snapshot?.lan_ip || window.location.hostname}:${snapshot?.port || window.location.port || 8080}/api/v1/tls/ca.crt`}
+                download="rollhaven-ca.crt"
+                className="w-full py-2 px-3 rounded-xl bg-[#090712] border border-violet-500/30 hover:border-emerald-400/50 text-[11px] font-semibold text-violet-200 flex items-center justify-center gap-1.5 transition"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                Descargar Certificado CA Local (rollhaven-ca.crt)
+              </a>
             </div>
           </section>
 
@@ -579,6 +842,11 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                             </div>
                           </td>
                           <td className="py-2.5 text-right space-x-1 whitespace-nowrap">
+                            {p.membership_status === 'REVOKED' && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold mr-1">
+                                REVOCADA
+                              </span>
+                            )}
                             <button
                               type="button"
                               onClick={() =>
@@ -587,6 +855,32 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                               className="px-2 py-1 rounded bg-violet-600/30 hover:bg-violet-600/60 text-violet-200"
                             >
                               Dar turno
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                sendDMOverride({
+                                  action: 'SET_MEMBERSHIP_STATUS',
+                                  target_player_id: p.id,
+                                  membership_status: p.membership_status === 'REVOKED' ? 'ACTIVE' : 'REVOKED',
+                                })
+                              }
+                              className={`p-1.5 rounded inline-flex align-middle ${
+                                p.membership_status === 'REVOKED'
+                                  ? 'text-emerald-400 hover:bg-emerald-500/15'
+                                  : 'text-amber-400 hover:bg-amber-500/15'
+                              }`}
+                              title={
+                                p.membership_status === 'REVOKED'
+                                  ? 'Reactivar membresía'
+                                  : 'Revocar membresía (bloquear comandos)'
+                              }
+                            >
+                              {p.membership_status === 'REVOKED' ? (
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              ) : (
+                                <Ban className="w-3.5 h-3.5" />
+                              )}
                             </button>
                             <button
                               type="button"
@@ -688,6 +982,100 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
             </section>
           </div>
         </div>
+
+        {/* Row 2B: Companion Hub (Realtime Chat, Journal Notes & Weighted Roll Tables) + Backup & Audit */}
+        {snapshot && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div className="lg:col-span-8">
+              <CompanionHub
+                campaign={snapshot.active_campaign}
+                activeSession={snapshot.campaign_sessions?.[0]}
+                players={snapshot.players}
+                localPlayerID="dm"
+                isDM
+                dmPIN={verifiedPIN}
+                messages={snapshot.chat_messages ?? []}
+                notes={snapshot.campaign_notes ?? []}
+                rollTables={snapshot.roll_tables ?? []}
+                noteConflict={noteConflict}
+                onClearNoteConflict={clearNoteConflict}
+                onSendMessage={(evt, payload) => sendMessage(evt, payload)}
+              />
+            </div>
+
+            <section className="lg:col-span-4 rounded-2xl border border-violet-500/25 bg-[#120d22]/85 p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold text-amber-200 flex items-center gap-2">
+                  <HardDrive className="w-4 h-4 text-violet-400" />
+                  Respaldos SHA-256 &amp; Auditoría
+                </h2>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleDownloadProtected(
+                      '/api/v1/backups/download',
+                      `rollhaven-backup-${snapshot.active_campaign?.id || 'default'}.zip`
+                    )
+                  }
+                  className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold flex items-center justify-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5" /> Descargar Backup Completo (.zip)
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleDownloadProtected(
+                      '/api/v1/campaigns/export',
+                      `rollhaven-campaign-${snapshot.active_campaign?.id || 'default'}.json`
+                    )
+                  }
+                  className="w-full py-2 px-3 rounded-xl bg-[#090712] border border-violet-500/30 hover:border-amber-400/60 text-amber-200 font-semibold flex items-center justify-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5" /> Exportar Campaña Portable (.json)
+                </button>
+                <label className="w-full py-2 px-3 rounded-xl bg-[#090712] border border-emerald-500/35 hover:bg-emerald-950/30 text-emerald-200 font-semibold flex items-center justify-center gap-1.5 cursor-pointer">
+                  <Upload className="w-3.5 h-3.5" /> Restaurar Backup (.zip / .json)
+                  <input
+                    ref={restoreFileRef}
+                    type="file"
+                    accept=".zip,.json,application/zip,application/json"
+                    onChange={handleRestoreFile}
+                    className="hidden"
+                  />
+                </label>
+                {backupStatus && (
+                  <div className="text-[11px] text-amber-200 bg-[#090712] border border-violet-500/20 rounded-lg px-2.5 py-1.5">
+                    {backupStatus}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-violet-500/20">
+                <h3 className="text-xs font-bold text-slate-300">Registro de Auditoría</h3>
+                <div className="h-44 overflow-y-auto space-y-1.5 pr-1 text-[11px]">
+                  {(snapshot.audit_events ?? []).length === 0 ? (
+                    <div className="text-slate-500 italic py-4 text-center">Sin eventos administrativos aún.</div>
+                  ) : (
+                    (snapshot.audit_events ?? []).map((ev) => (
+                      <div key={ev.id} className="p-2 rounded-lg bg-[#090712]/75 border border-white/5">
+                        <div className="flex items-center justify-between gap-2 text-amber-300 font-semibold">
+                          <span>{ev.action}</span>
+                          <span className="text-[10px] text-slate-500">
+                            {new Date(ev.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <div className="text-slate-300 mt-0.5">{ev.summary}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
 
         {/* Row 3: Tactical Map Control & Canvas (5x5 to 50x50) */}
         {snapshot && (

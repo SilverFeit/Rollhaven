@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -24,7 +25,7 @@ type WSMessage struct {
 	Payload  json.RawMessage `json:"payload,omitempty"`
 }
 
-// RollBroadcast represents a single roll/decision result transmitted live to all connected screens.
+// RollBroadcast represents a single roll/decision result transmitted to authorized connected screens.
 type RollBroadcast struct {
 	ID            int64     `json:"id"`
 	Timestamp     time.Time `json:"timestamp"`
@@ -35,26 +36,37 @@ type RollBroadcast struct {
 	SetType       string    `json:"set_type"`
 	ResultSummary string    `json:"result_summary"`
 	Detail        any       `json:"detail"`
+	Visibility    string    `json:"visibility,omitempty"`
+	CommandID     string    `json:"command_id,omitempty"`
+	Masked        bool      `json:"masked,omitempty"`
 	IsCritical    bool      `json:"is_critical,omitempty"`
 	IsFumble      bool      `json:"is_fumble,omitempty"`
 	IsEdge        bool      `json:"is_edge,omitempty"`
 	OutOfTurn     bool      `json:"out_of_turn,omitempty"`
 }
 
-// StateSnapshot is pushed via STATE_SYNC whenever players, turns, rolls, or map settings change.
+// StateSnapshot is pushed via STATE_SYNC, filtered per recipient audience on the server.
 type StateSnapshot struct {
-	Session          store.Session          `json:"session"`
-	Players          []store.Player         `json:"players"`
-	MapEntities      []store.MapEntity      `json:"map_entities"`
-	CurrentTurnIndex int                    `json:"current_turn_index"`
-	ActivePlayerID   string                 `json:"active_player_id"`
-	CurrentTurnRolls []RollBroadcast        `json:"current_turn_rolls"`
-	LastResult       *RollBroadcast         `json:"last_result,omitempty"`
-	ActionLog        []store.ActionLogEntry `json:"action_log"`
-	StrictTurnRolls  bool                   `json:"strict_turn_rolls"`
-	StrictTurnMove   bool                   `json:"strict_turn_move"`
-	LanIP            string                 `json:"lan_ip"`
-	Port             int                    `json:"port"`
+	Sequence         int64                   `json:"sequence"`
+	Session          store.Session           `json:"session"`
+	ActiveCampaign   store.Campaign          `json:"active_campaign"`
+	Campaigns        []store.Campaign        `json:"campaigns"`
+	CampaignSessions []store.CampaignSession `json:"campaign_sessions"`
+	Players          []store.Player          `json:"players"`
+	MapEntities      []store.MapEntity       `json:"map_entities"`
+	CampaignNotes    []store.CampaignNote    `json:"campaign_notes"`
+	ChatMessages     []store.ChatMessage     `json:"chat_messages"`
+	RollTables       []store.RollTable       `json:"roll_tables"`
+	AuditEvents      []store.AuditEvent      `json:"audit_events,omitempty"`
+	CurrentTurnIndex int                     `json:"current_turn_index"`
+	ActivePlayerID   string                  `json:"active_player_id"`
+	CurrentTurnRolls []RollBroadcast         `json:"current_turn_rolls"`
+	LastResult       *RollBroadcast          `json:"last_result,omitempty"`
+	ActionLog        []store.ActionLogEntry  `json:"action_log"`
+	StrictTurnRolls  bool                    `json:"strict_turn_rolls"`
+	StrictTurnMove   bool                    `json:"strict_turn_move"`
+	LanIP            string                  `json:"lan_ip"`
+	Port             int                     `json:"port"`
 }
 
 type wsClient struct {
@@ -67,7 +79,13 @@ type wsClient struct {
 	cancel    context.CancelFunc
 }
 
-// Hub coordinates WebSocket clients, turn state, live turn rolls, and broadcasts.
+type clientTarget struct {
+	client   *wsClient
+	playerID string
+	isDM     bool
+}
+
+// Hub coordinates WebSocket clients, campaign state, privacy-filtered sync, turns, and broadcasts.
 type Hub struct {
 	store *store.Store
 	lanIP string
@@ -76,6 +94,7 @@ type Hub struct {
 
 	mu               sync.RWMutex
 	closed           bool
+	sequence         int64
 	clients          map[*wsClient]struct{}
 	currentTurnRolls []RollBroadcast
 	lastResult       *RollBroadcast
@@ -107,6 +126,31 @@ func NewHub(st *store.Store, lanIP string, port int, dmPIN string) *Hub {
 		dmPIN:   dmPIN,
 		clients: make(map[*wsClient]struct{}),
 	}
+}
+
+func (h *Hub) nextSequence() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sequence++
+	return h.sequence
+}
+
+func (h *Hub) getClientIdentity(c *wsClient) (playerID string, isDM bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return c.playerID, c.isDM
+}
+
+func (h *Hub) setClientPlayerID(c *wsClient, pid string) {
+	h.mu.Lock()
+	c.playerID = pid
+	h.mu.Unlock()
+}
+
+func (h *Hub) setClientDM(c *wsClient, dm bool) {
+	h.mu.Lock()
+	c.isDM = dm
+	h.mu.Unlock()
 }
 
 func (h *Hub) register(c *wsClient) {
@@ -145,41 +189,86 @@ func (h *Hub) sendToClient(ctx context.Context, c *wsClient, msg any) error {
 	return wsjson.Write(wctx, c.conn, msg)
 }
 
-func (h *Hub) broadcast(msg any) {
+func (h *Hub) snapshotTargets() []clientTarget {
 	h.mu.RLock()
-	targets := make([]*wsClient, 0, len(h.clients))
+	defer h.mu.RUnlock()
+	if h.closed {
+		return nil
+	}
+	targets := make([]clientTarget, 0, len(h.clients))
 	for c := range h.clients {
-		targets = append(targets, c)
+		targets = append(targets, clientTarget{
+			client:   c,
+			playerID: c.playerID,
+			isDM:     c.isDM,
+		})
 	}
-	h.mu.RUnlock()
-
-	for _, c := range targets {
-		go func(client *wsClient) {
-			if err := h.sendToClient(context.Background(), client, msg); err != nil {
-				// Client write errors will trigger disconnect cleanup in read loop.
-				_ = err
-			}
-		}(c)
-	}
+	return targets
 }
 
-// BuildSnapshot constructs a consistent STATE_SYNC payload from SQLite and hub memory.
+func maskBlindRoll(rb RollBroadcast) RollBroadcast {
+	cp := rb
+	cp.ResultSummary = "Tirada ciega enviada al GM (resultado oculto)"
+	cp.Detail = nil
+	cp.IsCritical = false
+	cp.IsFumble = false
+	cp.IsEdge = false
+	cp.Masked = true
+	return cp
+}
+
+func filterRollForViewer(rb RollBroadcast, viewerID string, isDM bool) (RollBroadcast, bool) {
+	vis := store.NormalizeRollVisibility(rb.Visibility)
+	if store.CanViewScopedItem(vis, rb.PlayerID, viewerID, isDM) {
+		return rb, true
+	}
+	if vis == "GM_ONLY" && viewerID != "" && rb.PlayerID == viewerID && !isDM {
+		return maskBlindRoll(rb), true
+	}
+	return RollBroadcast{}, false
+}
+
+// BuildSnapshot constructs a DM-level snapshot from SQLite and hub memory.
 func (h *Hub) BuildSnapshot() (StateSnapshot, error) {
+	return h.BuildSnapshotFor("", true)
+}
+
+// BuildSnapshotFor constructs an audience-filtered STATE_SYNC payload strictly scoped to (viewerID, isDM).
+func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error) {
 	sess, err := h.store.GetSession()
 	if err != nil {
 		return StateSnapshot{}, err
 	}
+	activeCamp, _ := h.store.GetActiveCampaign()
+	campaigns, _ := h.store.ListCampaigns()
+	campSessions, _ := h.store.ListCampaignSessions(activeCamp.ID)
 	players, err := h.store.ListPlayersOrdered()
 	if err != nil {
 		return StateSnapshot{}, err
 	}
-	mapEntities, err := h.store.ListMapEntities()
+	rawEntities, err := h.store.ListMapEntities()
 	if err != nil {
 		return StateSnapshot{}, err
 	}
-	logs, err := h.store.ListActionLog(60)
+	mapEntities := make([]store.MapEntity, 0, len(rawEntities))
+	for _, ent := range rawEntities {
+		if !isDM && ent.IsHidden {
+			continue
+		}
+		mapEntities = append(mapEntities, ent)
+	}
+
+	notes, _ := h.store.ListCampaignNotesForViewer(activeCamp.ID, viewerID, isDM)
+	chats, _ := h.store.ListChatMessagesForViewer(activeCamp.ID, viewerID, isDM, 100)
+	rollTables, _ := h.store.ListRollTables(activeCamp.ID)
+	logs, err := h.store.ListActionLogForViewer(activeCamp.ID, viewerID, isDM, 60)
 	if err != nil {
 		return StateSnapshot{}, err
+	}
+
+	var audits []store.AuditEvent
+	if isDM {
+		audits, _ = h.store.ListAuditEvents(activeCamp.ID, 50)
 	}
 
 	turnIdx := sess.CurrentTurnIndex
@@ -195,24 +284,41 @@ func (h *Hub) BuildSnapshot() (StateSnapshot, error) {
 	}
 
 	h.mu.RLock()
-	rollsCopy := make([]RollBroadcast, len(h.currentTurnRolls))
-	copy(rollsCopy, h.currentTurnRolls)
-	var lastCopy *RollBroadcast
-	if h.lastResult != nil {
-		cp := *h.lastResult
-		lastCopy = &cp
-	}
+	seq := h.sequence
+	rawRolls := make([]RollBroadcast, len(h.currentTurnRolls))
+	copy(rawRolls, h.currentTurnRolls)
 	strictRolls := h.strictTurnRolls
 	strictMove := h.strictTurnMove
 	h.mu.RUnlock()
 
+	filteredRolls := make([]RollBroadcast, 0, len(rawRolls))
+	for _, rb := range rawRolls {
+		if viewRB, ok := filterRollForViewer(rb, viewerID, isDM); ok {
+			filteredRolls = append(filteredRolls, viewRB)
+		}
+	}
+
+	var lastCopy *RollBroadcast
+	if len(filteredRolls) > 0 {
+		cp := filteredRolls[len(filteredRolls)-1]
+		lastCopy = &cp
+	}
+
 	return StateSnapshot{
+		Sequence:         seq,
 		Session:          sess,
+		ActiveCampaign:   activeCamp,
+		Campaigns:        campaigns,
+		CampaignSessions: campSessions,
 		Players:          players,
 		MapEntities:      mapEntities,
+		CampaignNotes:    notes,
+		ChatMessages:     chats,
+		RollTables:       rollTables,
+		AuditEvents:      audits,
 		CurrentTurnIndex: turnIdx,
 		ActivePlayerID:   activeID,
-		CurrentTurnRolls: rollsCopy,
+		CurrentTurnRolls: filteredRolls,
 		LastResult:       lastCopy,
 		ActionLog:        logs,
 		StrictTurnRolls:  strictRolls,
@@ -222,30 +328,47 @@ func (h *Hub) BuildSnapshot() (StateSnapshot, error) {
 	}, nil
 }
 
-// BroadcastStateSync pushes the current global state to every connected WebSocket client.
+// BroadcastStateSync pushes an audience-filtered STATE_SYNC snapshot to every connected WebSocket client.
 func (h *Hub) BroadcastStateSync() {
-	h.mu.RLock()
-	closed := h.closed
-	h.mu.RUnlock()
-	if closed {
+	h.nextSequence()
+	targets := h.snapshotTargets()
+	if len(targets) == 0 {
 		return
 	}
-	snap, err := h.BuildSnapshot()
-	if err != nil {
-		if !strings.Contains(err.Error(), "database is closed") {
-			log.Printf("build state snapshot error: %v", err)
+
+	// Deduplicate serialized snapshots by (viewerID, isDM) identity to avoid redundant SQL reads.
+	type viewKey struct {
+		pid  string
+		isDM bool
+	}
+	cache := make(map[viewKey]json.RawMessage)
+
+	for _, t := range targets {
+		k := viewKey{pid: t.playerID, isDM: t.isDM}
+		raw, ok := cache[k]
+		if !ok {
+			snap, err := h.BuildSnapshotFor(t.playerID, t.isDM)
+			if err != nil {
+				if !strings.Contains(err.Error(), "database is closed") {
+					log.Printf("build state snapshot error: %v", err)
+				}
+				return
+			}
+			b, _ := json.Marshal(snap)
+			raw = b
+			cache[k] = raw
 		}
-		return
+
+		msg := WSMessage{Event: "STATE_SYNC", Payload: raw}
+		go func(cl *wsClient, m WSMessage) {
+			_ = h.sendToClient(context.Background(), cl, m)
+		}(t.client, msg)
 	}
-	raw, _ := json.Marshal(snap)
-	h.broadcast(WSMessage{
-		Event:   "STATE_SYNC",
-		Payload: raw,
-	})
 }
 
 func (h *Hub) sendStateSyncTo(ctx context.Context, c *wsClient) {
-	snap, err := h.BuildSnapshot()
+	pid, isDM := h.getClientIdentity(c)
+	snap, err := h.BuildSnapshotFor(pid, isDM)
 	if err != nil {
 		return
 	}
@@ -262,6 +385,22 @@ func (h *Hub) sendError(ctx context.Context, c *wsClient, message string) {
 		Event:   "ERROR",
 		Payload: raw,
 	})
+}
+
+func (h *Hub) ensureNotRevoked(ctx context.Context, c *wsClient) bool {
+	pid, isDM := h.getClientIdentity(c)
+	if isDM || pid == "" {
+		return true
+	}
+	p, err := h.store.GetPlayer(pid)
+	if err == nil && strings.ToUpper(p.MembershipStatus) == "REVOKED" {
+		_ = h.sendToClient(ctx, c, WSMessage{Event: "MEMBERSHIP_REVOKED", PlayerID: pid})
+		h.sendError(ctx, c, "Tu membresía en esta campaña ha sido revocada por el GM")
+		c.cancel()
+		_ = c.conn.Close(websocket.StatusPolicyViolation, "membership revoked")
+		return false
+	}
+	return true
 }
 
 // HandleWS upgrades an HTTP connection to WebSocket, starts the 15s heartbeat, and dispatches incoming events.
@@ -308,7 +447,13 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Rehydrate existing player immediately if player_id was provided in query string.
 	if playerID != "" {
-		if _, err := h.store.GetPlayer(playerID); err == nil {
+		if p, err := h.store.GetPlayer(playerID); err == nil {
+			if strings.ToUpper(p.MembershipStatus) == "REVOKED" && !isDM {
+				_ = h.sendToClient(ctx, client, WSMessage{Event: "MEMBERSHIP_REVOKED", PlayerID: playerID})
+				h.sendError(ctx, client, "Tu membresía en esta campaña ha sido revocada por el GM")
+				_ = conn.Close(websocket.StatusPolicyViolation, "membership revoked")
+				return
+			}
 			_ = h.store.SetPlayerConnection(playerID, true, clientIP, ua, -1)
 			h.BroadcastStateSync()
 		}
@@ -345,8 +490,9 @@ func (h *Hub) runHeartbeat(ctx context.Context, c *wsClient) {
 				return
 			}
 			latency := int(time.Since(start).Milliseconds())
-			if c.playerID != "" {
-				_ = h.store.SetPlayerConnection(c.playerID, true, c.clientIP, c.userAgent, latency)
+			pid, _ := h.getClientIdentity(c)
+			if pid != "" {
+				_ = h.store.SetPlayerConnection(pid, true, c.clientIP, c.userAgent, latency)
 				h.BroadcastStateSync()
 			}
 		}
@@ -371,18 +517,28 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 		if pid == "" {
 			pid = strings.TrimSpace(msg.PlayerID)
 		}
+		if pid != "" {
+			if existing, err := h.store.GetPlayer(pid); err == nil && strings.ToUpper(existing.MembershipStatus) == "REVOKED" {
+				_ = h.sendToClient(ctx, c, WSMessage{Event: "MEMBERSHIP_REVOKED", PlayerID: pid})
+				h.sendError(ctx, c, "Tu membresía en esta campaña fue revocada")
+				return
+			}
+		}
 		player, err := h.store.UpsertPlayer(pid, p.Name, p.Initiative, p.Race, p.Color, c.clientIP, c.userAgent)
 		if err != nil {
 			h.sendError(ctx, c, err.Error())
 			return
 		}
-		c.playerID = player.ID
+		h.setClientPlayerID(c, player.ID)
 		ack, _ := json.Marshal(map[string]any{"player": player})
 		_ = h.sendToClient(ctx, c, WSMessage{Event: "JOIN_ACK", PlayerID: player.ID, Payload: ack})
 		_, _ = h.store.AppendActionLog(player.ID, player.Name, "JOIN", fmt.Sprintf("Se unió con iniciativa %d", player.Initiative), nil)
 		h.BroadcastStateSync()
 
 	case "UPDATE_PROFILE":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
 		var p struct {
 			Name       string `json:"name"`
 			Initiative *int   `json:"initiative"`
@@ -393,7 +549,7 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 			h.sendError(ctx, c, "Payload UPDATE_PROFILE inválido")
 			return
 		}
-		targetID := c.playerID
+		targetID, _ := h.getClientIdentity(c)
 		if targetID == "" {
 			targetID = msg.PlayerID
 		}
@@ -415,6 +571,8 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 			Question     string   `json:"question"`
 			Faces        []string `json:"faces"`
 			Options      []string `json:"options"`
+			Visibility   string   `json:"visibility"`
+			CommandID    string   `json:"command_id"`
 			AsDM         bool     `json:"as_dm"`
 			PIN          string   `json:"pin"`
 		}
@@ -422,17 +580,27 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 			h.sendError(ctx, c, "Payload ROLL_ACTION inválido")
 			return
 		}
-		if req.AsDM && !c.isDM {
+		_, currentlyDM := h.getClientIdentity(c)
+		if req.AsDM && !currentlyDM {
 			if isLocalhostIP(c.clientIP) || (h.dmPIN != "" && req.PIN == h.dmPIN) {
-				c.isDM = true
+				h.setClientDM(c, true)
 			}
 		}
-		h.handleRollAction(ctx, c, msg.PlayerID, req.Type, req.DiceNotation, req.StrictYesNo, req.Question, req.Faces, req.Options, req.AsDM)
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
+		h.handleRollAction(ctx, c, msg.PlayerID, req.Type, req.DiceNotation, req.StrictYesNo, req.Question, req.Faces, req.Options, req.Visibility, req.CommandID, req.AsDM)
 
 	case "END_TURN":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
 		h.handleEndTurn(ctx, c, msg.PlayerID)
 
 	case "MOVE_TOKEN":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
 		var p struct {
 			PlayerID string `json:"player_id"`
 			TargetX  *int   `json:"target_x"`
@@ -456,17 +624,18 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 		} else if p.Y != nil {
 			y = *p.Y
 		}
+		clientPID, isDM := h.getClientIdentity(c)
 		targetID := strings.TrimSpace(p.PlayerID)
 		if targetID == "" {
-			targetID = c.playerID
+			targetID = clientPID
 		}
-		if !c.isDM && targetID != c.playerID {
+		if !isDM && targetID != clientPID {
 			h.sendError(ctx, c, "No puedes mover el token de otro jugador")
 			return
 		}
-		if !c.isDM && h.isStrictTurnMove() {
-			snap, _ := h.BuildSnapshot()
-			if snap.ActivePlayerID != "" && snap.ActivePlayerID != c.playerID {
+		if !isDM && h.isStrictTurnMove() {
+			snap, _ := h.BuildSnapshotFor(clientPID, isDM)
+			if snap.ActivePlayerID != "" && snap.ActivePlayerID != clientPID {
 				h.sendError(ctx, c, "Solo puedes mover tu ficha durante tu turno activo")
 				return
 			}
@@ -476,10 +645,13 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 			return
 		}
 		movedPayload, _ := json.Marshal(map[string]any{"player_id": targetID, "x": x, "y": y})
-		h.broadcast(WSMessage{Event: "TOKEN_MOVED", PlayerID: targetID, Payload: movedPayload})
+		h.broadcastRaw(WSMessage{Event: "TOKEN_MOVED", PlayerID: targetID, Payload: movedPayload})
 		h.BroadcastStateSync()
 
 	case "INVENTORY_ACTION":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
 		var p struct {
 			Action      string `json:"action"` // ADD, UPDATE, ADJUST, DELETE
 			ItemID      string `json:"item_id"`
@@ -492,7 +664,7 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 			h.sendError(ctx, c, "Payload INVENTORY_ACTION inválido")
 			return
 		}
-		pid := c.playerID
+		pid, _ := h.getClientIdentity(c)
 		if pid == "" {
 			pid = msg.PlayerID
 		}
@@ -518,6 +690,9 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 		h.BroadcastStateSync()
 
 	case "SAVE_NOTES":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
 		var p struct {
 			Content string `json:"content"`
 		}
@@ -525,7 +700,7 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 			h.sendError(ctx, c, "Payload SAVE_NOTES inválido")
 			return
 		}
-		pid := c.playerID
+		pid, _ := h.getClientIdentity(c)
 		if pid == "" {
 			pid = msg.PlayerID
 		}
@@ -541,7 +716,8 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 		_ = h.sendToClient(ctx, c, WSMessage{Event: "NOTES_SAVED", PlayerID: pid, Payload: ack})
 
 	case "SAVE_DM_NOTES":
-		if !c.isDM {
+		_, isDM := h.getClientIdentity(c)
+		if !isDM {
 			h.sendError(ctx, c, "Solo el Dungeon Master puede guardar notas del DM")
 			return
 		}
@@ -553,8 +729,46 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 		}
 		_ = h.store.SaveDMNotes(p.Content)
 
+	case "CHAT_SEND":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
+		h.handleChatSend(ctx, c, msg.PlayerID, msg.Payload)
+
+	case "NOTE_CREATE":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
+		h.handleNoteCreate(ctx, c, msg.PlayerID, msg.Payload)
+
+	case "NOTE_UPDATE":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
+		h.handleNoteUpdate(ctx, c, msg.PlayerID, msg.Payload)
+
+	case "NOTE_DELETE":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
+		h.handleNoteDelete(ctx, c, msg.PlayerID, msg.Payload)
+
+	case "ROLL_TABLE_EXEC":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
+		h.handleRollTableExec(ctx, c, msg.PlayerID, msg.Payload)
+
 	case "DM_OVERRIDE":
 		h.handleDMOverride(ctx, c, msg.Payload)
+	}
+}
+
+func (h *Hub) broadcastRaw(msg WSMessage) {
+	for _, t := range h.snapshotTargets() {
+		go func(cl *wsClient, m WSMessage) {
+			_ = h.sendToClient(context.Background(), cl, m)
+		}(t.client, msg)
 	}
 }
 
@@ -564,6 +778,24 @@ func (h *Hub) isStrictTurnMove() bool {
 	return h.strictTurnMove
 }
 
+func (h *Hub) broadcastResultFiltered(rb RollBroadcast) {
+	for _, t := range h.snapshotTargets() {
+		viewRB, allowed := filterRollForViewer(rb, t.playerID, t.isDM)
+		if !allowed {
+			continue
+		}
+		raw, _ := json.Marshal(viewRB)
+		msg := WSMessage{
+			Event:    "RESULT_BROADCAST",
+			PlayerID: rb.PlayerID,
+			Payload:  raw,
+		}
+		go func(cl *wsClient, m WSMessage) {
+			_ = h.sendToClient(context.Background(), cl, m)
+		}(t.client, msg)
+	}
+}
+
 func (h *Hub) handleRollAction(
 	ctx context.Context,
 	c *wsClient,
@@ -571,10 +803,27 @@ func (h *Hub) handleRollAction(
 	strictYesNo bool,
 	question string,
 	faces, options []string,
+	visibility string,
+	commandID string,
 	asDM bool,
 ) {
-	snap, _ := h.BuildSnapshot()
-	pid := c.playerID
+	clientPID, isDM := h.getClientIdentity(c)
+	commandID = strings.TrimSpace(commandID)
+	if commandID != "" {
+		if cachedRaw, ok := h.store.CheckCommandIdempotency(commandID); ok {
+			var cachedRB RollBroadcast
+			if err := json.Unmarshal(cachedRaw, &cachedRB); err == nil {
+				if viewRB, allowed := filterRollForViewer(cachedRB, clientPID, isDM); allowed {
+					b, _ := json.Marshal(viewRB)
+					_ = h.sendToClient(ctx, c, WSMessage{Event: "RESULT_BROADCAST", PlayerID: cachedRB.PlayerID, Payload: b})
+				}
+				return
+			}
+		}
+	}
+
+	snap, _ := h.BuildSnapshotFor(clientPID, isDM)
+	pid := clientPID
 	if pid == "" {
 		pid = fallbackPlayerID
 	}
@@ -583,7 +832,7 @@ func (h *Hub) handleRollAction(
 	raceIcon := "dm"
 	outOfTurn := false
 
-	if !asDM || !c.isDM {
+	if !asDM || !isDM {
 		if pid == "" {
 			h.sendError(ctx, c, "Debes unirte con tu nombre antes de lanzar")
 			return
@@ -607,6 +856,7 @@ func (h *Hub) handleRollAction(
 		pid = "dm"
 	}
 
+	vis := store.NormalizeRollVisibility(visibility)
 	var summary string
 	var detail any
 	var isCrit, isFumble, isEdge bool
@@ -674,7 +924,10 @@ func (h *Hub) handleRollAction(
 		return
 	}
 
-	logEntry, err := h.store.AppendActionLog(pid, playerName, strings.ToUpper(setType), summary, detail)
+	campID := h.store.GetActiveCampaignID()
+	logEntry, err := h.store.AppendActionLogScoped(
+		campID, pid, pid, playerName, strings.ToUpper(setType), summary, vis, commandID, detail,
+	)
 	if err != nil {
 		h.sendError(ctx, c, err.Error())
 		return
@@ -690,36 +943,301 @@ func (h *Hub) handleRollAction(
 		SetType:       strings.ToUpper(setType),
 		ResultSummary: summary,
 		Detail:        detail,
+		Visibility:    vis,
+		CommandID:     commandID,
 		IsCritical:    isCrit,
 		IsFumble:      isFumble,
 		IsEdge:        isEdge,
 		OutOfTurn:     outOfTurn,
 	}
 
+	h.store.SaveCommandIdempotency(commandID, pid, "ROLL_ACTION", rb)
+
 	h.mu.Lock()
 	h.currentTurnRolls = append(h.currentTurnRolls, rb)
 	h.lastResult = &rb
 	h.mu.Unlock()
 
-	rawRB, _ := json.Marshal(rb)
-	h.broadcast(WSMessage{
-		Event:    "RESULT_BROADCAST",
-		PlayerID: pid,
-		Payload:  rawRB,
-	})
+	h.broadcastResultFiltered(rb)
+	h.BroadcastStateSync()
+}
+
+func (h *Hub) handleChatSend(ctx context.Context, c *wsClient, fallbackID string, payload json.RawMessage) {
+	var req struct {
+		Body         string   `json:"body"`
+		Visibility   string   `json:"visibility"`
+		RecipientIDs []string `json:"recipient_ids"`
+		CommandID    string   `json:"command_id"`
+		AsDM         bool     `json:"as_dm"`
+		PIN          string   `json:"pin"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		h.sendError(ctx, c, "Payload CHAT_SEND inválido")
+		return
+	}
+	clientPID, isDM := h.getClientIdentity(c)
+	if req.AsDM && !isDM {
+		if isLocalhostIP(c.clientIP) || (h.dmPIN != "" && req.PIN == h.dmPIN) {
+			h.setClientDM(c, true)
+			isDM = true
+		}
+	}
+
+	if cid := strings.TrimSpace(req.CommandID); cid != "" {
+		if _, dup := h.store.CheckCommandIdempotency(cid); dup {
+			return
+		}
+	}
+
+	authorID := clientPID
+	if authorID == "" {
+		authorID = fallbackID
+	}
+	authorName := "Dungeon Master"
+	authorRole := "GM"
+	authorColor := "#f59e0b"
+
+	if !isDM || (!req.AsDM && authorID != "") {
+		if authorID == "" {
+			h.sendError(ctx, c, "Debes unirte con tu nombre antes de enviar mensajes")
+			return
+		}
+		p, err := h.store.GetPlayer(authorID)
+		if err != nil {
+			h.sendError(ctx, c, "Jugador no encontrado")
+			return
+		}
+		authorName = p.Name
+		authorRole = p.Role
+		if authorRole == "" {
+			authorRole = "PLAYER"
+		}
+		authorColor = p.ColorHex
+	} else {
+		authorID = "dm"
+	}
+
+	body := strings.TrimSpace(req.Body)
+	lower := strings.ToLower(body)
+	if strings.HasPrefix(lower, "/roll ") || strings.HasPrefix(lower, "/r ") {
+		expr := strings.TrimSpace(body[strings.Index(body, " ")+1:])
+		rollVis := "PUBLIC"
+		switch store.NormalizeChatVisibility(req.Visibility) {
+		case "GM_WHISPER":
+			rollVis = "ROLLER_AND_GM"
+		}
+		h.handleRollAction(ctx, c, authorID, "DICE", expr, false, "", nil, nil, rollVis, req.CommandID, isDM && req.AsDM)
+		return
+	}
+
+	campID := h.store.GetActiveCampaignID()
+	sessID := h.store.GetActiveCampaignSessionID(campID)
+	msgRec, err := h.store.AppendChatMessage(
+		campID, sessID, authorID, authorName, authorRole, authorColor,
+		body, req.Visibility, req.RecipientIDs, req.CommandID,
+	)
+	if err != nil {
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	h.store.SaveCommandIdempotency(req.CommandID, authorID, "CHAT_SEND", msgRec)
+
+	// Deliver private whispers only to authorized recipients
+	for _, t := range h.snapshotTargets() {
+		visible := msgRec.Visibility == "CAMPAIGN" ||
+			(msgRec.Visibility == "GM_WHISPER" && (t.isDM || (t.playerID != "" && t.playerID == msgRec.AuthorID))) ||
+			(msgRec.Visibility == "SELECTED_USERS" && (t.isDM || (t.playerID != "" && (t.playerID == msgRec.AuthorID || containsString(msgRec.RecipientIDs, t.playerID)))))
+		if !visible {
+			continue
+		}
+		raw, _ := json.Marshal(msgRec)
+		wsMsg := WSMessage{Event: "CHAT_MESSAGE", PlayerID: msgRec.AuthorID, Payload: raw}
+		go func(cl *wsClient, m WSMessage) {
+			_ = h.sendToClient(context.Background(), cl, m)
+		}(t.client, wsMsg)
+	}
+	h.BroadcastStateSync()
+}
+
+func containsString(list []string, target string) bool {
+	for _, s := range list {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Hub) resolveActor(c *wsClient, fallbackID string, asDM bool, pin string) (actorID, actorName string, isDM bool, err error) {
+	clientPID, currentlyDM := h.getClientIdentity(c)
+	if asDM && !currentlyDM {
+		if isLocalhostIP(c.clientIP) || (h.dmPIN != "" && pin == h.dmPIN) {
+			h.setClientDM(c, true)
+			currentlyDM = true
+		}
+	}
+	if currentlyDM && (asDM || clientPID == "") {
+		return "dm", "Dungeon Master", true, nil
+	}
+	pid := clientPID
+	if pid == "" {
+		pid = fallbackID
+	}
+	if pid == "" {
+		return "", "", currentlyDM, fmt.Errorf("jugador no identificado")
+	}
+	p, getErr := h.store.GetPlayer(pid)
+	if getErr != nil {
+		return "", "", currentlyDM, fmt.Errorf("jugador no encontrado")
+	}
+	return p.ID, p.Name, currentlyDM, nil
+}
+
+func (h *Hub) handleNoteCreate(ctx context.Context, c *wsClient, fallbackID string, payload json.RawMessage) {
+	var req struct {
+		Title        string   `json:"title"`
+		Body         string   `json:"body"`
+		Category     string   `json:"category"`
+		Visibility   string   `json:"visibility"`
+		RecipientIDs []string `json:"recipient_ids"`
+		AllowEdit    bool     `json:"allow_edit"`
+		AsDM         bool     `json:"as_dm"`
+		PIN          string   `json:"pin"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		h.sendError(ctx, c, "Payload NOTE_CREATE inválido")
+		return
+	}
+	actorID, actorName, _, err := h.resolveActor(c, fallbackID, req.AsDM, req.PIN)
+	if err != nil {
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	campID := h.store.GetActiveCampaignID()
+	if _, err := h.store.CreateCampaignNote(
+		campID, actorID, actorName, req.Title, req.Body, req.Category, req.Visibility, req.RecipientIDs, req.AllowEdit,
+	); err != nil {
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	h.BroadcastStateSync()
+}
+
+func (h *Hub) handleNoteUpdate(ctx context.Context, c *wsClient, fallbackID string, payload json.RawMessage) {
+	var req struct {
+		NoteID          string   `json:"note_id"`
+		ExpectedVersion int      `json:"expected_version"`
+		Title           string   `json:"title"`
+		Body            string   `json:"body"`
+		Category        string   `json:"category"`
+		Visibility      string   `json:"visibility"`
+		RecipientIDs    []string `json:"recipient_ids"`
+		AllowEdit       *bool    `json:"allow_edit"`
+		AsDM            bool     `json:"as_dm"`
+		PIN             string   `json:"pin"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		h.sendError(ctx, c, "Payload NOTE_UPDATE inválido")
+		return
+	}
+	actorID, _, isDM, err := h.resolveActor(c, fallbackID, req.AsDM, req.PIN)
+	if err != nil {
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	if _, err := h.store.UpdateCampaignNote(
+		req.NoteID, actorID, isDM, req.ExpectedVersion, req.Title, req.Body, req.Category, req.Visibility, req.RecipientIDs, req.AllowEdit,
+	); err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			raw, _ := json.Marshal(map[string]any{"note_id": req.NoteID, "message": err.Error()})
+			_ = h.sendToClient(ctx, c, WSMessage{Event: "NOTE_CONFLICT", Payload: raw})
+		}
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	h.BroadcastStateSync()
+}
+
+func (h *Hub) handleNoteDelete(ctx context.Context, c *wsClient, fallbackID string, payload json.RawMessage) {
+	var req struct {
+		NoteID string `json:"note_id"`
+		AsDM   bool   `json:"as_dm"`
+		PIN    string `json:"pin"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		h.sendError(ctx, c, "Payload NOTE_DELETE inválido")
+		return
+	}
+	actorID, _, isDM, err := h.resolveActor(c, fallbackID, req.AsDM, req.PIN)
+	if err != nil {
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	if err := h.store.DeleteCampaignNote(req.NoteID, actorID, isDM); err != nil {
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	h.BroadcastStateSync()
+}
+
+func (h *Hub) handleRollTableExec(ctx context.Context, c *wsClient, fallbackID string, payload json.RawMessage) {
+	var req struct {
+		TableID    string `json:"table_id"`
+		Visibility string `json:"visibility"`
+		AsDM       bool   `json:"as_dm"`
+		PIN        string `json:"pin"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		h.sendError(ctx, c, "Payload ROLL_TABLE_EXEC inválido")
+		return
+	}
+	actorID, actorName, _, err := h.resolveActor(c, fallbackID, req.AsDM, req.PIN)
+	if err != nil {
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	res, err := h.store.ExecuteRollTable(req.TableID)
+	if err != nil {
+		h.sendError(ctx, c, err.Error())
+		return
+	}
+	vis := store.NormalizeRollVisibility(req.Visibility)
+	campID := h.store.GetActiveCampaignID()
+	summary := fmt.Sprintf("Tabla [%s] (%d/%d) → %s", res.TableName, res.Roll, res.MaxWeight, res.Entry.Label)
+	entry, _ := h.store.AppendActionLogScoped(campID, actorID, actorID, actorName, "ROLL_TABLE", summary, vis, "", res)
+
+	rb := RollBroadcast{
+		ID:            entry.ID,
+		Timestamp:     time.Now().UTC(),
+		PlayerID:      actorID,
+		PlayerName:    actorName,
+		PlayerColor:   "#f59e0b",
+		RaceIcon:      "dm",
+		SetType:       "WHEEL",
+		ResultSummary: summary,
+		Detail:        res,
+		Visibility:    vis,
+	}
+	h.mu.Lock()
+	h.currentTurnRolls = append(h.currentTurnRolls, rb)
+	h.lastResult = &rb
+	h.mu.Unlock()
+
+	h.broadcastResultFiltered(rb)
 	h.BroadcastStateSync()
 }
 
 func (h *Hub) handleEndTurn(ctx context.Context, c *wsClient, fallbackID string) {
-	snap, err := h.BuildSnapshot()
+	clientPID, isDM := h.getClientIdentity(c)
+	snap, err := h.BuildSnapshotFor(clientPID, isDM)
 	if err != nil || len(snap.Players) == 0 {
 		return
 	}
-	pid := c.playerID
+	pid := clientPID
 	if pid == "" {
 		pid = fallbackID
 	}
-	if !c.isDM && snap.ActivePlayerID != pid {
+	if !isDM && snap.ActivePlayerID != pid {
 		h.sendError(ctx, c, "Solo el jugador en turno actual puede pasar el turno")
 		return
 	}
@@ -749,44 +1267,62 @@ func (h *Hub) handleEndTurn(ctx context.Context, c *wsClient, fallbackID string)
 
 func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.RawMessage) {
 	var cmd struct {
-		Action          string   `json:"action"`
-		PIN             string   `json:"pin"`
-		TargetPlayerID  string   `json:"target_player_id"`
-		Value           int      `json:"value"`
-		PlayerIDs       []string `json:"player_ids"`
-		MapEnabled      *bool    `json:"map_enabled"`
-		MapRows         *int     `json:"map_rows"`
-		MapCols         *int     `json:"map_cols"`
-		MapGridColor    *string  `json:"map_grid_color"`
-		MapGridOpacity  *float64 `json:"map_grid_opacity"`
-		TargetX         int      `json:"target_x"`
-		TargetY         int      `json:"target_y"`
-		Hidden          bool     `json:"hidden"`
-		StrictTurnRolls *bool    `json:"strict_turn_rolls"`
-		StrictTurnMove  *bool    `json:"strict_turn_move"`
-		EntityID        string   `json:"entity_id"`
-		EntityKind      string   `json:"entity_kind"`
-		EntityName      string   `json:"entity_name"`
-		EntitySize      int      `json:"entity_size"`
-		EntityColor     string   `json:"entity_color"`
-		EntityHPCurrent *int     `json:"entity_hp_current"`
-		EntityHPMax     *int     `json:"entity_hp_max"`
-		EntityNote      *string  `json:"entity_note"`
-		EntityHidden    *bool    `json:"entity_hidden"`
+		Action          string                 `json:"action"`
+		PIN             string                 `json:"pin"`
+		TargetPlayerID  string                 `json:"target_player_id"`
+		Value           int                    `json:"value"`
+		PlayerIDs       []string               `json:"player_ids"`
+		MapEnabled      *bool                  `json:"map_enabled"`
+		MapRows         *int                   `json:"map_rows"`
+		MapCols         *int                   `json:"map_cols"`
+		MapGridColor    *string                `json:"map_grid_color"`
+		MapGridOpacity  *float64               `json:"map_grid_opacity"`
+		TargetX         int                    `json:"target_x"`
+		TargetY         int                    `json:"target_y"`
+		Hidden          bool                   `json:"hidden"`
+		StrictTurnRolls *bool                  `json:"strict_turn_rolls"`
+		StrictTurnMove  *bool                  `json:"strict_turn_move"`
+		EntityID        string                 `json:"entity_id"`
+		EntityKind      string                 `json:"entity_kind"`
+		EntityName      string                 `json:"entity_name"`
+		EntitySize      int                    `json:"entity_size"`
+		EntityColor     string                 `json:"entity_color"`
+		EntityHPCurrent *int                   `json:"entity_hp_current"`
+		EntityHPMax     *int                   `json:"entity_hp_max"`
+		EntityNote      *string                `json:"entity_note"`
+		EntityHidden    *bool                  `json:"entity_hidden"`
+		CampaignID      string                 `json:"campaign_id"`
+		CampaignName    string                 `json:"campaign_name"`
+		CampaignDesc    string                 `json:"campaign_desc"`
+		CampaignSystem  string                 `json:"campaign_system"`
+		Archived        bool                   `json:"archived"`
+		SessionID       string                 `json:"session_id"`
+		SessionTitle    string                 `json:"session_title"`
+		SessionStatus   string                 `json:"session_status"`
+		Role            string                 `json:"role"`
+		MembershipStat  string                 `json:"membership_status"`
+		MessageID       string                 `json:"message_id"`
+		TableID         string                 `json:"table_id"`
+		TableName       string                 `json:"table_name"`
+		TableDesc       string                 `json:"table_desc"`
+		TableEntries    []store.RollTableEntry `json:"table_entries"`
 	}
 	if err := json.Unmarshal(payload, &cmd); err != nil {
 		h.sendError(ctx, c, "Payload DM_OVERRIDE inválido")
 		return
 	}
 
-	if !c.isDM {
-		if h.dmPIN != "" && cmd.PIN == h.dmPIN {
-			c.isDM = true
+	_, isDM := h.getClientIdentity(c)
+	if !isDM {
+		if isLocalhostIP(c.clientIP) || (h.dmPIN != "" && cmd.PIN == h.dmPIN) {
+			h.setClientDM(c, true)
 		} else {
 			h.sendError(ctx, c, "Acceso denegado: requiere permisos del Dungeon Master")
 			return
 		}
 	}
+
+	campID := h.store.GetActiveCampaignID()
 
 	switch strings.ToUpper(cmd.Action) {
 	case "SET_INITIATIVE":
@@ -843,15 +1379,31 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 		p, err := h.store.GetPlayer(cmd.TargetPlayerID)
 		if err == nil {
 			_ = h.store.DeletePlayer(cmd.TargetPlayerID)
-			// Notify kicked sockets to reset onboarding if needed
-			h.mu.RLock()
-			for client := range h.clients {
-				if client.playerID == cmd.TargetPlayerID {
-					_ = h.sendToClient(ctx, client, WSMessage{Event: "KICKED", PlayerID: cmd.TargetPlayerID})
+			for _, t := range h.snapshotTargets() {
+				if t.playerID == cmd.TargetPlayerID {
+					_ = h.sendToClient(ctx, t.client, WSMessage{Event: "KICKED", PlayerID: cmd.TargetPlayerID})
 				}
 			}
-			h.mu.RUnlock()
 			_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "DM_OVERRIDE", fmt.Sprintf("Expulsó a %s de la mesa", p.Name), nil)
+			_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "KICK_PLAYER", fmt.Sprintf("Expulsó a %s", p.Name))
+		}
+
+	case "SET_MEMBERSHIP_STATUS":
+		if err := h.store.SetPlayerMembership(cmd.TargetPlayerID, cmd.Role, cmd.MembershipStat); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		p, _ := h.store.GetPlayer(cmd.TargetPlayerID)
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "MEMBERSHIP_UPDATE", fmt.Sprintf("Membresía de %s → rol=%s estado=%s", p.Name, p.Role, p.MembershipStatus))
+		if strings.ToUpper(cmd.MembershipStat) == "REVOKED" {
+			for _, t := range h.snapshotTargets() {
+				if t.playerID == cmd.TargetPlayerID && !t.isDM {
+					_ = h.sendToClient(ctx, t.client, WSMessage{Event: "MEMBERSHIP_REVOKED", PlayerID: cmd.TargetPlayerID})
+					h.sendError(ctx, t.client, "Tu membresía ha sido revocada por el GM")
+					t.client.cancel()
+					_ = t.client.conn.Close(websocket.StatusPolicyViolation, "membership revoked")
+				}
+			}
 		}
 
 	case "UPDATE_MAP_CONFIG":
@@ -893,7 +1445,7 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 			return
 		}
 		movedPayload, _ := json.Marshal(map[string]any{"player_id": cmd.TargetPlayerID, "x": cmd.TargetX, "y": cmd.TargetY})
-		h.broadcast(WSMessage{Event: "TOKEN_MOVED", PlayerID: cmd.TargetPlayerID, Payload: movedPayload})
+		h.broadcastRaw(WSMessage{Event: "TOKEN_MOVED", PlayerID: cmd.TargetPlayerID, Payload: movedPayload})
 
 	case "TOGGLE_TOKEN_VISIBILITY":
 		_ = h.store.ToggleTokenVisibility(cmd.TargetPlayerID, cmd.Hidden)
@@ -961,6 +1513,90 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 
 	case "CLEAR_MAP_ENTITIES":
 		if err := h.store.ClearMapEntities(); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+
+	case "CREATE_CAMPAIGN":
+		cObj, err := h.store.CreateCampaign(cmd.CampaignName, cmd.CampaignDesc, cmd.CampaignSystem, true)
+		if err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(cObj.ID, "dm", "Dungeon Master", "CAMPAIGN_CREATE", fmt.Sprintf("Creó y activó campaña %q", cObj.Name))
+
+	case "UPDATE_CAMPAIGN":
+		targetCamp := cmd.CampaignID
+		if targetCamp == "" {
+			targetCamp = campID
+		}
+		if err := h.store.UpdateCampaign(targetCamp, cmd.CampaignName, cmd.CampaignDesc, cmd.CampaignSystem); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(targetCamp, "dm", "Dungeon Master", "CAMPAIGN_UPDATE", fmt.Sprintf("Actualizó datos de campaña %q", cmd.CampaignName))
+
+	case "ARCHIVE_CAMPAIGN":
+		if err := h.store.ArchiveCampaign(cmd.CampaignID, cmd.Archived); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "CAMPAIGN_ARCHIVE", fmt.Sprintf("Cambió estado de archivo (%v) en %s", cmd.Archived, cmd.CampaignID))
+
+	case "SWITCH_CAMPAIGN":
+		if err := h.store.SwitchCampaign(cmd.CampaignID); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(cmd.CampaignID, "dm", "Dungeon Master", "CAMPAIGN_SWITCH", "Cambió campaña activa en la mesa")
+
+	case "START_CAMPAIGN_SESSION":
+		cs, err := h.store.StartCampaignSession(campID, cmd.SessionTitle)
+		if err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "SESSION_START", fmt.Sprintf("Inició sesión %q", cs.Title))
+
+	case "PAUSE_CAMPAIGN_SESSION":
+		sid := cmd.SessionID
+		if sid == "" {
+			sid = h.store.GetActiveCampaignSessionID(campID)
+		}
+		if err := h.store.UpdateCampaignSessionStatus(sid, "PAUSED"); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "SESSION_PAUSE", fmt.Sprintf("Pausó sesión %s", sid))
+
+	case "CLOSE_CAMPAIGN_SESSION":
+		sid := cmd.SessionID
+		if sid == "" {
+			sid = h.store.GetActiveCampaignSessionID(campID)
+		}
+		if err := h.store.UpdateCampaignSessionStatus(sid, "CLOSED"); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "SESSION_CLOSE", fmt.Sprintf("Cerró sesión %s (recursos conservados)", sid))
+
+	case "DELETE_CHAT_MESSAGE":
+		if err := h.store.DeleteChatMessage(cmd.MessageID); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "CHAT_MODERATE", fmt.Sprintf("Moderó mensaje %s", cmd.MessageID))
+
+	case "CREATE_ROLL_TABLE":
+		rt, err := h.store.CreateRollTable(campID, cmd.TableName, cmd.TableDesc, cmd.TableEntries)
+		if err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "ROLL_TABLE_CREATE", fmt.Sprintf("Creó tabla aleatoria %q", rt.Name))
+
+	case "DELETE_ROLL_TABLE":
+		if err := h.store.DeleteRollTable(cmd.TableID); err != nil {
 			h.sendError(ctx, c, err.Error())
 			return
 		}

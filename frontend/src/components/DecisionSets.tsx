@@ -1,9 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Coins, Dices, Disc3, HelpCircle, LayoutGrid, Plus, RotateCw, Sparkles, Trash2 } from 'lucide-react'
-import { CoinDetail, DiceDetail, Magic8Detail, RollBroadcast, WheelDetail } from '../types'
+import { Coins, Dices, Disc3, Eye, EyeOff, HelpCircle, LayoutGrid, Lock, Plus, RotateCw, Shield, Sparkles, Trash2 } from 'lucide-react'
+import { CoinDetail, DiceDetail, Magic8Detail, RollBroadcast, RollVisibility, WheelDetail } from '../types'
 import { DicePhysicsArena } from './DicePhysicsArena'
 import { PeonzaArenaCanvas } from './PeonzaArenaCanvas'
 import { triggerGestureHaptic } from '../lib/haptics'
+
+function makeCommandID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+}
+
+const VISIBILITY_OPTIONS: { id: RollVisibility; label: string; hint: string }[] = [
+  { id: 'PUBLIC', label: 'Pública', hint: 'Toda la mesa' },
+  { id: 'ROLLER_AND_GM', label: 'Tú + GM', hint: 'Solo tú y el GM' },
+  { id: 'GM_ONLY', label: 'Ciega GM', hint: 'Solo el GM ve el resultado' },
+  { id: 'ROLLER_ONLY', label: 'Personal', hint: 'Solo visible para ti' },
+]
 
 interface DecisionSetsProps {
   onRoll: (payload: Record<string, unknown>) => void
@@ -49,6 +63,7 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<SetTab>('DICE')
   const [showAllSets, setShowAllSets] = useState(false)
+  const [visibility, setVisibility] = useState<RollVisibility>('PUBLIC')
 
   // Set 1: Dice state + 1:1 physical arena hold-to-shake state
   const [diceCount, setDiceCount] = useState(2)
@@ -123,7 +138,13 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
     const modSuffix = diceMod > 0 ? `+${diceMod}` : diceMod < 0 ? `${diceMod}` : ''
     const notation = `${diceCount}d${sides}${modSuffix}`
     setCustomNotation(notation)
-    onRoll({ type: 'DICE', dice_notation: notation, as_dm: asDM })
+    onRoll({
+      type: 'DICE',
+      dice_notation: notation,
+      visibility,
+      command_id: makeCommandID(),
+      as_dm: asDM,
+    })
   }
 
   const handleDieBtnDown = (sides: number, e: React.PointerEvent<HTMLButtonElement>) => {
@@ -164,13 +185,32 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
   const triggerCustomDice = (e: React.FormEvent) => {
     e.preventDefault()
     if (!customNotation.trim()) return
-    onRoll({ type: 'DICE', dice_notation: customNotation.trim(), as_dm: asDM })
+    triggerGestureHaptic('throw')
+    onRoll({
+      type: 'DICE',
+      dice_notation: customNotation.trim(),
+      visibility,
+      command_id: makeCommandID(),
+      as_dm: asDM,
+    })
+  }
+
+  const triggerPresetFormula = (formula: string) => {
+    setCustomNotation(formula)
+    triggerGestureHaptic('throw')
+    onRoll({
+      type: 'DICE',
+      dice_notation: formula,
+      visibility,
+      command_id: makeCommandID(),
+      as_dm: asDM,
+    })
   }
 
   const triggerCoin = () => {
     triggerGestureHaptic('throw')
     setCoinAnimating(true)
-    onRoll({ type: 'COIN', as_dm: asDM })
+    onRoll({ type: 'COIN', visibility, command_id: makeCommandID(), as_dm: asDM })
     window.setTimeout(() => setCoinAnimating(false), 1100)
   }
 
@@ -182,6 +222,8 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
       type: 'MAGIC_8_BALL',
       strict_yes_no: strictYesNo,
       question: question.trim(),
+      visibility,
+      command_id: makeCommandID(),
       as_dm: asDM,
     })
     window.setTimeout(() => setBallShaking(false), 650)
@@ -190,18 +232,27 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
   const triggerSpinner = () => {
     void targetOwnerID
     triggerGestureHaptic('throw')
-    onRoll({ type: 'SPINNER', faces: spinnerFaces, as_dm: asDM })
+    onRoll({ type: 'SPINNER', faces: spinnerFaces, visibility, command_id: makeCommandID(), as_dm: asDM })
   }
 
   const triggerWheel = () => {
     triggerGestureHaptic('throw')
-    onRoll({ type: 'WHEEL', options: wheelOptions, as_dm: asDM })
+    onRoll({ type: 'WHEEL', options: wheelOptions, visibility, command_id: makeCommandID(), as_dm: asDM })
   }
 
-  // Extract typed latest results per set for dedicated showcase cards
-  const latestDice = lastBroadcast?.set_type === 'DICE' ? (lastBroadcast.detail as DiceDetail) : null
-  const latestCoin = lastBroadcast?.set_type === 'COIN' ? (lastBroadcast.detail as CoinDetail) : null
-  const latestMagic8 = lastBroadcast?.set_type === 'MAGIC_8_BALL' ? (lastBroadcast.detail as Magic8Detail) : null
+  // Extract typed latest results per set (guarded against masked/null detail payloads)
+  const latestDice =
+    lastBroadcast?.set_type === 'DICE' && lastBroadcast.detail && !lastBroadcast.masked
+      ? (lastBroadcast.detail as DiceDetail)
+      : null
+  const latestCoin =
+    lastBroadcast?.set_type === 'COIN' && lastBroadcast.detail && !lastBroadcast.masked
+      ? (lastBroadcast.detail as CoinDetail)
+      : null
+  const latestMagic8 =
+    lastBroadcast?.set_type === 'MAGIC_8_BALL' && lastBroadcast.detail && !lastBroadcast.masked
+      ? (lastBroadcast.detail as Magic8Detail)
+      : null
   const activeWheelOptions = wheelOptions
 
   const tabs: { id: SetTab; label: string; icon: React.ReactNode }[] = [
@@ -254,6 +305,42 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
             {showAllSets ? 'Ver por Pestañas' : 'Ver los 5 Sets'}
           </button>
         )}
+      </div>
+
+      {/* Audience Visibility Policy Selector (Foundry Privacy Architecture) */}
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-[#090712]/65 px-3 py-2 rounded-xl border border-violet-500/20">
+        <span className="text-[11px] text-slate-400 font-semibold flex items-center gap-1.5">
+          {visibility === 'PUBLIC' ? (
+            <Eye className="w-3.5 h-3.5 text-emerald-400" />
+          ) : visibility === 'GM_ONLY' ? (
+            <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+          ) : visibility === 'ROLLER_ONLY' ? (
+            <Lock className="w-3.5 h-3.5 text-violet-400" />
+          ) : (
+            <Shield className="w-3.5 h-3.5 text-sky-400" />
+          )}
+          Audiencia:
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {VISIBILITY_OPTIONS.map((opt) => {
+            const active = visibility === opt.id
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                title={opt.hint}
+                onClick={() => setVisibility(opt.id)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition border ${
+                  active
+                    ? 'border-amber-400/80 bg-amber-500/20 text-amber-200'
+                    : 'border-violet-500/20 bg-[#120d22] text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* SET 1: POLYHEDRAL DICE */}
@@ -344,21 +431,43 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
             })}
           </div>
 
-          <form onSubmit={triggerCustomDice} className="flex gap-2">
-            <input
-              type="text"
-              value={customNotation}
-              onChange={(e) => setCustomNotation(e.target.value)}
-              placeholder="Ej. 2d8+4 o 1d20-1"
-              className="flex-1 px-3.5 py-2.5 rounded-xl bg-[#090712] border border-violet-500/30 text-sm font-mono text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
-            />
-            <button
-              type="submit"
-              disabled={disabled}
-              className="px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-45 text-white text-sm font-bold transition"
-            >
-              Lanzar
-            </button>
+          <form onSubmit={triggerCustomDice} className="space-y-2">
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="text-slate-400 mr-1">Fórmulas AST:</span>
+              {[
+                { label: 'Ventaja (2d20kh1)', formula: '2d20kh1' },
+                { label: 'Desventaja (2d20kl1)', formula: '2d20kl1' },
+                { label: 'Atributo (4d6kh3)', formula: '4d6kh3' },
+                { label: 'Mixto (2d6+1d4+3)', formula: '2d6+1d4+3' },
+                { label: 'Mitad ((1d20+4)/2)', formula: '(1d20+4)/2' },
+              ].map((pr) => (
+                <button
+                  key={pr.formula}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => triggerPresetFormula(pr.formula)}
+                  className="px-2 py-1 rounded-lg bg-[#090712] border border-violet-500/25 text-violet-200 hover:border-amber-400 disabled:opacity-45 font-mono"
+                >
+                  {pr.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customNotation}
+                onChange={(e) => setCustomNotation(e.target.value)}
+                placeholder="Ej. 2d6+1d4+3, 2d20kh1 o (1d20+4)/2"
+                className="flex-1 px-3.5 py-2.5 rounded-xl bg-[#090712] border border-violet-500/30 text-sm font-mono text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <button
+                type="submit"
+                disabled={disabled}
+                className="px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-45 text-white text-sm font-bold transition"
+              >
+                Lanzar
+              </button>
+            </div>
           </form>
 
           {latestDice && (
@@ -372,25 +481,66 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
               }`}
             >
               <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="font-mono font-bold text-amber-300">{latestDice.notation}:</span>
-                {latestDice.rolls.map((val, idx) => (
-                  <span
-                    key={idx}
-                    className={`px-2 py-0.5 rounded font-mono font-bold ${
-                      latestDice.sides === 20 && val === 20
-                        ? 'bg-emerald-500 text-slate-950'
-                        : latestDice.sides === 20 && val === 1
-                          ? 'bg-rose-600 text-white'
-                          : 'bg-violet-900/60 text-violet-100'
-                    }`}
-                  >
-                    {val}
-                  </span>
-                ))}
-                {latestDice.modifier !== 0 && (
-                  <span className="font-mono text-slate-400">
-                    {latestDice.modifier > 0 ? `+ ${latestDice.modifier}` : `- ${Math.abs(latestDice.modifier)}`}
-                  </span>
+                <span className="font-mono font-bold text-amber-300">
+                  {latestDice.normalized_expression || latestDice.notation}:
+                </span>
+                {latestDice.terms && latestDice.terms.length > 0 ? (
+                  latestDice.terms.map((term, tIdx) =>
+                    term.kind === 'dice' ? (
+                      <span key={tIdx} className="inline-flex items-center gap-1 bg-black/30 px-1.5 py-0.5 rounded">
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {term.sign < 0 ? '-' : tIdx > 0 ? '+' : ''}
+                          {term.notation}:
+                        </span>
+                        {(term.rolls ?? []).map((val, idx) => {
+                          const keptCount = (term.kept ?? []).filter((k) => k === val).length
+                          const isKept = keptCount > 0
+                          return (
+                            <span
+                              key={idx}
+                              className={`px-1.5 py-0.5 rounded font-mono font-bold ${
+                                term.sides === 20 && val === 20
+                                  ? 'bg-emerald-500 text-slate-950'
+                                  : term.sides === 20 && val === 1
+                                    ? 'bg-rose-600 text-white'
+                                    : isKept
+                                      ? 'bg-violet-900/70 text-violet-100'
+                                      : 'bg-slate-800/70 text-slate-500 line-through'
+                              }`}
+                            >
+                              {val}
+                            </span>
+                          )
+                        })}
+                      </span>
+                    ) : (
+                      <span key={tIdx} className="font-mono text-slate-300">
+                        {term.value >= 0 ? `+ ${term.value}` : `- ${Math.abs(term.value)}`}
+                      </span>
+                    )
+                  )
+                ) : (
+                  <>
+                    {(latestDice.rolls ?? []).map((val, idx) => (
+                      <span
+                        key={idx}
+                        className={`px-2 py-0.5 rounded font-mono font-bold ${
+                          latestDice.sides === 20 && val === 20
+                            ? 'bg-emerald-500 text-slate-950'
+                            : latestDice.sides === 20 && val === 1
+                              ? 'bg-rose-600 text-white'
+                              : 'bg-violet-900/60 text-violet-100'
+                        }`}
+                      >
+                        {val}
+                      </span>
+                    ))}
+                    {latestDice.modifier !== 0 && (
+                      <span className="font-mono text-slate-400">
+                        {latestDice.modifier > 0 ? `+ ${latestDice.modifier}` : `- ${Math.abs(latestDice.modifier)}`}
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
               <div className="text-base font-black font-mono">Total: {latestDice.total}</div>

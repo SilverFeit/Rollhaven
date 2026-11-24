@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -77,7 +78,7 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 		LanIP:     lanIP,
 		Port:      port,
 		DMPIN:     dmPIN,
-		Version:   "1.3.0",
+		Version:   "1.4.0",
 		TLSConfig: tlsAssets.Config,
 		CACertPEM: tlsAssets.CACertPEM,
 	}
@@ -129,6 +130,16 @@ func (s *Server) mountRoutes() {
 		api.Post("/player/{id}/inventory", s.handleUpsertInventory)
 		api.Put("/player/{id}/inventory/{itemId}", s.handleUpdateInventoryItem)
 		api.Delete("/player/{id}/inventory/{itemId}", s.handleDeleteInventoryItem)
+
+		api.Get("/notes", s.handleListCampaignNotes)
+		api.Post("/notes", s.handleCreateCampaignNote)
+		api.Patch("/notes/{noteId}", s.handlePatchCampaignNote)
+		api.Delete("/notes/{noteId}", s.handleDeleteCampaignNote)
+
+		api.Get("/campaigns/export", s.handleExportCampaign)
+		api.Post("/campaigns/import", s.handleImportCampaign)
+		api.Get("/backups/download", s.handleDownloadBackupZip)
+		api.Post("/backups/restore", s.handleRestoreBackupZip)
 	})
 
 	// Serve uploaded maps & character sheets
@@ -171,7 +182,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ver := s.Version
 	if ver == "" {
-		ver = "1.3.0"
+		ver = "1.4.0"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -181,6 +192,26 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"lan_ip":  s.LanIP,
 		"port":    s.Port,
 	})
+}
+
+func (s *Server) resolveViewerIdentity(r *http.Request) (viewerID string, isDM bool) {
+	viewerID = strings.TrimSpace(r.URL.Query().Get("player_id"))
+	if viewerID == "" {
+		viewerID = strings.TrimSpace(r.Header.Get("X-Player-ID"))
+	}
+	roleDM := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("role"))) == "dm"
+	authorized, _ := s.isDMAuthorized(r)
+	explicitPIN := strings.TrimSpace(r.Header.Get("X-DM-PIN")) != "" && strings.TrimSpace(r.Header.Get("X-DM-PIN")) == s.DMPIN
+	if roleDM && authorized {
+		return viewerID, true
+	}
+	if explicitPIN && viewerID == "" {
+		return "", true
+	}
+	if viewerID == "" && authorized {
+		return "", true
+	}
+	return viewerID, false
 }
 
 func (s *Server) handleDownloadCACert(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +225,8 @@ func (s *Server) handleDownloadCACert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePublicState(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.Hub.BuildSnapshot()
+	viewerID, isDM := s.resolveViewerIdentity(r)
+	snap, err := s.Hub.BuildSnapshotFor(viewerID, isDM)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -502,4 +534,218 @@ func (s *Server) handleDeleteInventoryItem(w http.ResponseWriter, r *http.Reques
 	}
 	s.Hub.BroadcastStateSync()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleListCampaignNotes(w http.ResponseWriter, r *http.Request) {
+	viewerID, isDM := s.resolveViewerIdentity(r)
+	campID := strings.TrimSpace(r.URL.Query().Get("campaign_id"))
+	notes, err := s.Store.ListCampaignNotesForViewer(campID, viewerID, isDM)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"notes": notes})
+}
+
+func (s *Server) handleCreateCampaignNote(w http.ResponseWriter, r *http.Request) {
+	viewerID, isDM := s.resolveViewerIdentity(r)
+	ownerID := viewerID
+	ownerName := "Participante"
+	if isDM && ownerID == "" {
+		ownerID = "dm"
+		ownerName = "Dungeon Master"
+	} else if ownerID != "" {
+		p, err := s.Store.GetPlayer(ownerID)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Jugador no encontrado"})
+			return
+		}
+		if strings.ToUpper(p.MembershipStatus) == "REVOKED" && !isDM {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Membresía revocada"})
+			return
+		}
+		ownerName = p.Name
+	} else {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Identidad requerida"})
+		return
+	}
+
+	var body struct {
+		Title        string   `json:"title"`
+		Body         string   `json:"body"`
+		Category     string   `json:"category"`
+		Visibility   string   `json:"visibility"`
+		RecipientIDs []string `json:"recipient_ids"`
+		AllowEdit    bool     `json:"allow_edit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+	note, err := s.Store.CreateCampaignNote(
+		s.Store.GetActiveCampaignID(),
+		ownerID, ownerName, body.Title, body.Body, body.Category, body.Visibility, body.RecipientIDs, body.AllowEdit,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusCreated, note)
+}
+
+func (s *Server) handlePatchCampaignNote(w http.ResponseWriter, r *http.Request) {
+	noteID := chi.URLParam(r, "noteId")
+	viewerID, isDM := s.resolveViewerIdentity(r)
+	actorID := viewerID
+	if isDM && actorID == "" {
+		actorID = "dm"
+	}
+	if actorID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Identidad requerida"})
+		return
+	}
+
+	var body struct {
+		ExpectedVersion int      `json:"expected_version"`
+		Title           string   `json:"title"`
+		Body            string   `json:"body"`
+		Category        string   `json:"category"`
+		Visibility      string   `json:"visibility"`
+		RecipientIDs    []string `json:"recipient_ids"`
+		AllowEdit       *bool    `json:"allow_edit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+
+	updated, err := s.Store.UpdateCampaignNote(
+		noteID, actorID, isDM, body.ExpectedVersion, body.Title, body.Body, body.Category, body.Visibility, body.RecipientIDs, body.AllowEdit,
+	)
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "VERSION_CONFLICT"})
+			return
+		}
+		if strings.Contains(err.Error(), "permiso") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleDeleteCampaignNote(w http.ResponseWriter, r *http.Request) {
+	noteID := chi.URLParam(r, "noteId")
+	viewerID, isDM := s.resolveViewerIdentity(r)
+	actorID := viewerID
+	if isDM && actorID == "" {
+		actorID = "dm"
+	}
+	if err := s.Store.DeleteCampaignNote(noteID, actorID, isDM); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleExportCampaign(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede exportar campañas"})
+		return
+	}
+	bundle, err := s.Store.ExportCampaignBundle()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	filename := fmt.Sprintf("rollhaven-campaign-%s.json", bundle.Campaign.ID)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	writeJSON(w, http.StatusOK, bundle)
+}
+
+func (s *Server) handleImportCampaign(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede importar campañas"})
+		return
+	}
+	var bundle store.CampaignBundle
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 25<<20)).Decode(&bundle); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Archivo de campaña JSON inválido"})
+		return
+	}
+	if err := s.Store.ImportCampaignBundle(bundle); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]any{"status": "imported", "campaign": bundle.Campaign.Name})
+}
+
+func (s *Server) handleDownloadBackupZip(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede generar backups"})
+		return
+	}
+	zipBytes, err := s.Store.CreateFullBackupZip(s.DataDir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	filename := fmt.Sprintf("rollhaven-backup-%s.zip", time.Now().UTC().Format("20060102-150405"))
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(zipBytes)
+}
+
+func (s *Server) handleRestoreBackupZip(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede restaurar backups"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 100<<20)
+	var zipBytes []byte
+	ct := strings.ToLower(r.Header.Get("Content-Type"))
+	if strings.Contains(ct, "multipart/form-data") {
+		if err := r.ParseMultipartForm(100 << 20); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Backup demasiado grande o inválido"})
+			return
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Campo 'file' requerido"})
+			return
+		}
+		defer file.Close()
+		var readErr error
+		zipBytes, readErr = io.ReadAll(file)
+		if readErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": readErr.Error()})
+			return
+		}
+	} else {
+		var err error
+		zipBytes, err = io.ReadAll(r.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	if err := s.Store.RestoreFullBackupZip(s.DataDir, zipBytes); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
 }

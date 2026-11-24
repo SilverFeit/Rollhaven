@@ -243,3 +243,84 @@ func TestTurnOrderAndTieBreaking(t *testing.T) {
 		t.Fatalf("expected wrap back to 3, got %d", prev)
 	}
 }
+
+func TestAdvancedDiceASTAndSecurityLimits(t *testing.T) {
+	// Multi-term compound expression
+	res, err := engine.RollDice("2d6 + 1d4 + 3")
+	if err != nil {
+		t.Fatalf("compound expression failed: %v", err)
+	}
+	if res.Count != 3 || len(res.Terms) != 3 {
+		t.Fatalf("expected 3 dice & 3 terms, got count=%d terms=%d", res.Count, len(res.Terms))
+	}
+	if res.Total != res.Terms[0].Subtotal+res.Terms[1].Subtotal+3 {
+		t.Fatalf("compound total mismatch: %+v", res)
+	}
+
+	// Parentheses + integer division
+	divRes, err := engine.RollDice("(1d20 + 4) / 2")
+	if err != nil {
+		t.Fatalf("parentheses/division failed: %v", err)
+	}
+	expectedDiv := (divRes.Terms[0].Subtotal + 4) / 2
+	if divRes.Total != expectedDiv {
+		t.Fatalf("division total mismatch: got %d want %d", divRes.Total, expectedDiv)
+	}
+
+	// Keep highest (Advantage) and Keep lowest (Disadvantage) and 4d6kh3
+	for i := 0; i < 20; i++ {
+		adv, err := engine.RollDice("2d20kh1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(adv.Rolls) != 2 || len(adv.Terms[0].Kept) != 1 {
+			t.Fatalf("expected 2 rolls and 1 kept, got %+v", adv)
+		}
+		maxVal := adv.Rolls[0]
+		if adv.Rolls[1] > maxVal {
+			maxVal = adv.Rolls[1]
+		}
+		if adv.Total != maxVal {
+			t.Fatalf("kh1 expected max=%d, got %d", maxVal, adv.Total)
+		}
+
+		dis, err := engine.RollDice("2d20kl1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		minVal := dis.Rolls[0]
+		if dis.Rolls[1] < minVal {
+			minVal = dis.Rolls[1]
+		}
+		if dis.Total != minVal {
+			t.Fatalf("kl1 expected min=%d, got %d", minVal, dis.Total)
+		}
+
+		stat, err := engine.RollDice("4d6kh3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stat.Rolls) != 4 || len(stat.Terms[0].Kept) != 3 {
+			t.Fatalf("4d6kh3 expected 4 rolls & 3 kept, got %+v", stat)
+		}
+	}
+
+	// Security & parser safety rejections
+	badInputs := []string{
+		"",
+		"eval(process.exit())",
+		"1d20; DROP TABLE players;",
+		"101d6",
+		"50d6 + 51d6",
+		"1d20 / 0",
+		"2d6kh5",
+		"(((((((((1d20)))))))))", // depth 9 > MaxParenDepth(8)
+		strings.Repeat("1+", 140) + "1",
+		"1d10001",
+	}
+	for _, expr := range badInputs {
+		if _, err := engine.RollDice(expr); err == nil {
+			t.Fatalf("expected error on unsafe/invalid expression %q", expr)
+		}
+	}
+}

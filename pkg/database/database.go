@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
 
 //go:embed schema.sql
 var schemaSQL string
+
+// CurrentSchemaVersion tracks the SQLite migration version for Rollhaven.
+const CurrentSchemaVersion = 4
 
 // Open initializes a pure-Go SQLite database at dbPath, ensures its parent directory exists,
 // configures WAL mode and foreign keys, and applies idempotent schema migrations.
@@ -52,5 +56,38 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 
+	if err := applyColumnMigrations(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("apply column migrations: %w", err)
+	}
+
+	if _, err := db.Exec(`INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)`, CurrentSchemaVersion); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("record schema version: %w", err)
+	}
+
 	return db, nil
+}
+
+// applyColumnMigrations upgrades existing v1.x SQLite files cleanly without losing player/campaign data.
+func applyColumnMigrations(db *sql.DB) error {
+	alterStatements := []string{
+		`ALTER TABLE sessions ADD COLUMN active_campaign_id TEXT DEFAULT 'default'`,
+		`ALTER TABLE players ADD COLUMN role TEXT DEFAULT 'PLAYER'`,
+		`ALTER TABLE players ADD COLUMN membership_status TEXT DEFAULT 'ACTIVE'`,
+		`ALTER TABLE action_log ADD COLUMN campaign_id TEXT DEFAULT 'default'`,
+		`ALTER TABLE action_log ADD COLUMN roller_id TEXT DEFAULT ''`,
+		`ALTER TABLE action_log ADD COLUMN visibility TEXT DEFAULT 'PUBLIC'`,
+		`ALTER TABLE action_log ADD COLUMN command_id TEXT DEFAULT ''`,
+	}
+	for _, stmt := range alterStatements {
+		if _, err := db.Exec(stmt); err != nil {
+			msg := strings.ToLower(err.Error())
+			if strings.Contains(msg, "duplicate column name") {
+				continue
+			}
+			return fmt.Errorf("%s: %w", stmt, err)
+		}
+	}
+	return nil
 }

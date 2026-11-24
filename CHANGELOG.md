@@ -2,6 +2,23 @@
 
 All notable changes to **Rollhaven** (formerly Dicebound) are documented in this file.
 
+## [1.4.0] — 2026-11-24
+
+### Added — Rollhaven Companion Suite (Foundry Architecture)
+- **Campaigns, Isolated Resources & Session Lifecycle (`campaigns`, `campaign_sessions`):**
+  - Added multi-campaign creation, editing, switching, and archiving under Rollhaven's DM Dashboard, plus session lifecycle controls (`ACTIVE` / `PAUSED` / `CLOSED`) that preserve campaign notes, chat, roll tables, and logs when closing sessions.
+- **Server-Side Audience Policies, Revocation & Idempotency:**
+  - Added strict server-side audience filtering across `STATE_SYNC`, `RESULT_BROADCAST`, `/api/v1/state`, and `/api/v1/notes` for 4 roll visibility modes (`PUBLIC`, `ROLLER_AND_GM`, `GM_ONLY` blind rolls, `ROLLER_ONLY`), 4 journal visibility modes (`PRIVATE`, `GM_SHARED`, `CAMPAIGN`, `SELECTED_USERS`), and chat whispers (`CAMPAIGN`, `GM_WHISPER`, `SELECTED_USERS`).
+  - Added idempotent command processing (`command_id` stored in `processed_commands`), live membership revocation (`SET_MEMBERSHIP_STATUS` → `REVOKED` blocking commands & closing revoked sockets), and monotonic WebSocket `sequence` numbers.
+- **Safe AST Compound Dice Parser (`pkg/engine/dice.go`):**
+  - Implemented recursive-descent AST evaluation (no `eval`) supporting compound arithmetic (`2d6+1d4+3`, `(1d20+4)/2`), keep modifiers (`2d20kh1` Advantage, `2d20kl1` Disadvantage, `4d6kh3`), and strict safety bounds (max 256 chars, depth 8, 100 dice, zero-division guard) with per-term breakdowns.
+- **Chat Hub, Versioned Journals & Weighted Roll Tables (`CompanionHub`):**
+  - Integrated real-time tabletop chat & whispers (with `/roll` & `/r` commands and DM moderation), structured shared/private campaign notes with optimistic concurrency (`409 Conflict` on stale versions), and cryptographic weighted Random Roll Tables.
+- **Verified Portable Export & Full ZIP Backups with SHA-256:**
+  - Added portable checksummed JSON campaign export/import, full ZIP backup/restore packaging `bundle.json`, `manifest.json`, and uploaded map/sheet assets verified via SHA-256 before committing, plus an administrative Audit Event log and quick local CA certificate download (`rollhaven-ca.crt`).
+
+---
+
 ## [1.3.0] — 2026-11-24
 
 ### Fixed & Added

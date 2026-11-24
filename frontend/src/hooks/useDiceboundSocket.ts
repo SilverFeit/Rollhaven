@@ -15,8 +15,10 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
   const [connected, setConnected] = useState(false)
   const [playerID, setPlayerID] = useState<string>(() => localStorage.getItem(STORAGE_PLAYER_ID_KEY) || '')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [noteConflict, setNoteConflict] = useState<string | null>(null)
   const [lastBroadcast, setLastBroadcast] = useState<RollBroadcast | null>(null)
   const [kicked, setKicked] = useState(false)
+  const [revoked, setRevoked] = useState(false)
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
@@ -81,6 +83,7 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
               localStorage.setItem(STORAGE_PLAYER_ID_KEY, pid)
               setPlayerID(pid)
               setKicked(false)
+              setRevoked(false)
             }
             break
           }
@@ -88,8 +91,17 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
             setLastBroadcast(msg.payload as RollBroadcast)
             break
           }
+          case 'NOTE_CONFLICT': {
+            setNoteConflict(msg.payload?.message || 'Conflicto de edición: otro participante actualizó esta nota primero.')
+            break
+          }
           case 'ERROR': {
             setErrorMsg(msg.payload?.message || 'Error en la operación')
+            break
+          }
+          case 'MEMBERSHIP_REVOKED': {
+            setRevoked(true)
+            setErrorMsg('Tu membresía en esta campaña ha sido revocada por el GM.')
             break
           }
           case 'KICKED': {
@@ -145,9 +157,12 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
   const clearSession = useCallback(() => {
     localStorage.removeItem(STORAGE_PLAYER_ID_KEY)
     setPlayerID('')
+    setRevoked(false)
+    setKicked(false)
   }, [])
 
   const clearError = useCallback(() => setErrorMsg(null), [])
+  const clearNoteConflict = useCallback(() => setNoteConflict(null), [])
 
   return {
     snapshot,
@@ -155,10 +170,13 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
     playerID,
     lastBroadcast,
     errorMsg,
+    noteConflict,
     kicked,
+    revoked,
     sendMessage,
     clearSession,
     clearError,
+    clearNoteConflict,
     reconnectNow: connect,
   }
 }

@@ -25,6 +25,7 @@ type Session struct {
 	MapGridColor     string    `json:"map_grid_color"`
 	MapGridOpacity   float64   `json:"map_grid_opacity"`
 	CurrentTurnIndex int       `json:"current_turn_index"`
+	ActiveCampaignID string    `json:"active_campaign_id"`
 }
 
 // Player represents a joined player or character token in the session.
@@ -45,6 +46,8 @@ type Player struct {
 	ClientIP           string          `json:"client_ip"`
 	UserAgent          string          `json:"user_agent"`
 	LatencyMS          int             `json:"latency_ms"`
+	Role               string          `json:"role"`
+	MembershipStatus   string          `json:"membership_status"`
 	CreatedAt          time.Time       `json:"created_at"`
 	LastSeen           time.Time       `json:"last_seen"`
 	Inventory          []InventoryItem `json:"inventory,omitempty"`
@@ -64,10 +67,14 @@ type InventoryItem struct {
 type ActionLogEntry struct {
 	ID         int64           `json:"id"`
 	SessionID  string          `json:"session_id"`
+	CampaignID string          `json:"campaign_id"`
 	PlayerID   string          `json:"player_id"`
+	RollerID   string          `json:"roller_id"`
 	PlayerName string          `json:"player_name"`
 	ActionType string          `json:"action_type"`
 	Details    string          `json:"details"`
+	Visibility string          `json:"visibility"`
+	CommandID  string          `json:"command_id,omitempty"`
 	ResultJSON json.RawMessage `json:"result_json"`
 	CreatedAt  time.Time       `json:"created_at"`
 }
@@ -105,8 +112,8 @@ func New(db *sql.DB) (*Store, error) {
 
 func (s *Store) ensureDefaults() error {
 	_, err := s.db.Exec(`
-		INSERT OR IGNORE INTO sessions (id, is_active, map_enabled, map_rows, map_cols, map_image_path, map_grid_color, map_grid_opacity, current_turn_index)
-		VALUES (?, 1, 0, 10, 10, '', '#ffffff', 0.35, 0)
+		INSERT OR IGNORE INTO sessions (id, is_active, map_enabled, map_rows, map_cols, map_image_path, map_grid_color, map_grid_opacity, current_turn_index, active_campaign_id)
+		VALUES (?, 1, 0, 10, 10, '', '#ffffff', 0.35, 0, 'default')
 	`, DefaultSessionID)
 	if err != nil {
 		return fmt.Errorf("ensure default session: %w", err)
@@ -121,7 +128,7 @@ func (s *Store) ensureDefaults() error {
 			return fmt.Errorf("init dm_notes: %w", err)
 		}
 	}
-	return nil
+	return s.ensureCompanionDefaults()
 }
 
 // GetSession loads the active session configuration.
@@ -129,12 +136,13 @@ func (s *Store) GetSession() (Session, error) {
 	var sess Session
 	var isActive, mapEnabled int
 	err := s.db.QueryRow(`
-		SELECT id, created_at, is_active, map_enabled, map_rows, map_cols, map_image_path, map_grid_color, map_grid_opacity, current_turn_index
+		SELECT id, created_at, is_active, map_enabled, map_rows, map_cols, map_image_path, map_grid_color, map_grid_opacity, current_turn_index, COALESCE(NULLIF(active_campaign_id, ''), 'default')
 		FROM sessions WHERE id = ?
 	`, DefaultSessionID).Scan(
 		&sess.ID, &sess.CreatedAt, &isActive, &mapEnabled,
 		&sess.MapRows, &sess.MapCols, &sess.MapImagePath,
 		&sess.MapGridColor, &sess.MapGridOpacity, &sess.CurrentTurnIndex,
+		&sess.ActiveCampaignID,
 	)
 	if err != nil {
 		return Session{}, fmt.Errorf("get session: %w", err)
@@ -329,13 +337,14 @@ func (s *Store) GetPlayer(id string) (Player, error) {
 		SELECT id, session_id, name, initiative, race_icon, color_hex,
 		       character_sheet_path, token_x, token_y, token_hidden,
 		       turn_order, manual_order, is_connected, client_ip, user_agent,
-		       latency_ms, created_at, last_seen
+		       latency_ms, COALESCE(NULLIF(role, ''), 'PLAYER'), COALESCE(NULLIF(membership_status, ''), 'ACTIVE'),
+		       created_at, last_seen
 		FROM players WHERE id = ?
 	`, id).Scan(
 		&p.ID, &p.SessionID, &p.Name, &p.Initiative, &p.RaceIcon, &p.ColorHex,
 		&p.CharacterSheetPath, &p.TokenX, &p.TokenY, &tokenHidden,
 		&p.TurnOrder, &manualOrder, &isConnected, &p.ClientIP, &p.UserAgent,
-		&p.LatencyMS, &p.CreatedAt, &p.LastSeen,
+		&p.LatencyMS, &p.Role, &p.MembershipStatus, &p.CreatedAt, &p.LastSeen,
 	)
 	if err != nil {
 		return Player{}, err
@@ -354,7 +363,8 @@ func (s *Store) ListPlayersOrdered() ([]Player, error) {
 		SELECT id, session_id, name, initiative, race_icon, color_hex,
 		       character_sheet_path, token_x, token_y, token_hidden,
 		       turn_order, manual_order, is_connected, client_ip, user_agent,
-		       latency_ms, created_at, last_seen
+		       latency_ms, COALESCE(NULLIF(role, ''), 'PLAYER'), COALESCE(NULLIF(membership_status, ''), 'ACTIVE'),
+		       created_at, last_seen
 		FROM players WHERE session_id = ?
 	`, DefaultSessionID)
 	if err != nil {
@@ -371,7 +381,7 @@ func (s *Store) ListPlayersOrdered() ([]Player, error) {
 			&p.ID, &p.SessionID, &p.Name, &p.Initiative, &p.RaceIcon, &p.ColorHex,
 			&p.CharacterSheetPath, &p.TokenX, &p.TokenY, &tokenHidden,
 			&p.TurnOrder, &manualOrder, &isConnected, &p.ClientIP, &p.UserAgent,
-			&p.LatencyMS, &p.CreatedAt, &p.LastSeen,
+			&p.LatencyMS, &p.Role, &p.MembershipStatus, &p.CreatedAt, &p.LastSeen,
 		); err != nil {
 			return nil, err
 		}
@@ -624,8 +634,18 @@ func (s *Store) SaveDMNotes(content string) error {
 	return err
 }
 
-// AppendActionLog writes an event or roll into the persistent audit log.
+// AppendActionLog writes a public roll, decision, or game event into the persistent audit log.
 func (s *Store) AppendActionLog(playerID, playerName, actionType, details string, resultPayload any) (ActionLogEntry, error) {
+	campID := s.GetActiveCampaignID()
+	return s.AppendActionLogScoped(campID, playerID, playerID, playerName, actionType, details, "PUBLIC", "", resultPayload)
+}
+
+// AppendActionLogScoped persists an action/roll entry with explicit campaign scope, visibility policy, and commandId.
+func (s *Store) AppendActionLogScoped(campaignID, playerID, rollerID, playerName, actionType, details, visibility, commandID string, resultPayload any) (ActionLogEntry, error) {
+	if strings.TrimSpace(campaignID) == "" {
+		campaignID = s.GetActiveCampaignID()
+	}
+	visibility = NormalizeRollVisibility(visibility)
 	raw := json.RawMessage(`{}`)
 	if resultPayload != nil {
 		b, err := json.Marshal(resultPayload)
@@ -634,9 +654,9 @@ func (s *Store) AppendActionLog(playerID, playerName, actionType, details string
 		}
 	}
 	res, err := s.db.Exec(`
-		INSERT INTO action_log (session_id, player_id, player_name, action_type, details, result_json)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, DefaultSessionID, playerID, playerName, actionType, details, string(raw))
+		INSERT INTO action_log (session_id, campaign_id, player_id, roller_id, player_name, action_type, details, visibility, command_id, result_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, DefaultSessionID, campaignID, playerID, rollerID, playerName, actionType, details, visibility, commandID, string(raw))
 	if err != nil {
 		return ActionLogEntry{}, err
 	}
@@ -644,27 +664,41 @@ func (s *Store) AppendActionLog(playerID, playerName, actionType, details string
 	return ActionLogEntry{
 		ID:         id,
 		SessionID:  DefaultSessionID,
+		CampaignID: campaignID,
 		PlayerID:   playerID,
+		RollerID:   rollerID,
 		PlayerName: playerName,
 		ActionType: actionType,
 		Details:    details,
+		Visibility: visibility,
+		CommandID:  commandID,
 		ResultJSON: raw,
 		CreatedAt:  time.Now().UTC(),
 	}, nil
 }
 
-// ListActionLog retrieves the most recent N log entries in chronological order (newest last or newest first? Let's return newest first for feed convenience).
+// ListActionLog retrieves the most recent N log entries across the active campaign.
 func (s *Store) ListActionLog(limit int) ([]ActionLogEntry, error) {
+	return s.ListActionLogForViewer(s.GetActiveCampaignID(), "", true, limit)
+}
+
+// ListActionLogForViewer filters historical action/roll entries server-side by campaign and audience policy.
+func (s *Store) ListActionLogForViewer(campaignID, viewerID string, isDM bool, limit int) ([]ActionLogEntry, error) {
 	if limit <= 0 {
 		limit = 100
 	}
+	if strings.TrimSpace(campaignID) == "" {
+		campaignID = s.GetActiveCampaignID()
+	}
 	rows, err := s.db.Query(`
-		SELECT id, session_id, player_id, player_name, action_type, details, result_json, created_at
+		SELECT id, session_id, COALESCE(NULLIF(campaign_id, ''), 'default'), player_id,
+		       COALESCE(NULLIF(roller_id, ''), player_id), player_name, action_type, details,
+		       COALESCE(NULLIF(visibility, ''), 'PUBLIC'), COALESCE(command_id, ''), result_json, created_at
 		FROM action_log
-		WHERE session_id = ?
+		WHERE session_id = ? AND COALESCE(NULLIF(campaign_id, ''), 'default') = ?
 		ORDER BY id DESC
 		LIMIT ?
-	`, DefaultSessionID, limit)
+	`, DefaultSessionID, campaignID, limit*2)
 	if err != nil {
 		return nil, err
 	}
@@ -674,14 +708,24 @@ func (s *Store) ListActionLog(limit int) ([]ActionLogEntry, error) {
 	for rows.Next() {
 		var e ActionLogEntry
 		var rawStr string
-		if err := rows.Scan(&e.ID, &e.SessionID, &e.PlayerID, &e.PlayerName, &e.ActionType, &e.Details, &rawStr, &e.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&e.ID, &e.SessionID, &e.CampaignID, &e.PlayerID,
+			&e.RollerID, &e.PlayerName, &e.ActionType, &e.Details,
+			&e.Visibility, &e.CommandID, &rawStr, &e.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		if rawStr == "" {
 			rawStr = "{}"
 		}
 		e.ResultJSON = json.RawMessage(rawStr)
+		if !CanViewScopedItem(e.Visibility, e.RollerID, viewerID, isDM) {
+			continue
+		}
 		entries = append(entries, e)
+		if len(entries) >= limit {
+			break
+		}
 	}
 	if entries == nil {
 		entries = []ActionLogEntry{}

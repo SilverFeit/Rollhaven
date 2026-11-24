@@ -9,6 +9,10 @@ export type RaceId =
   | 'halforc'
   | 'tiefling'
 
+export type RollVisibility = 'PUBLIC' | 'ROLLER_AND_GM' | 'GM_ONLY' | 'ROLLER_ONLY'
+export type NoteVisibility = 'PRIVATE' | 'GM_SHARED' | 'CAMPAIGN' | 'SELECTED_USERS'
+export type ChatVisibility = 'CAMPAIGN' | 'GM_WHISPER' | 'SELECTED_USERS'
+
 export interface InventoryItem {
   id: string
   player_id: string
@@ -34,6 +38,8 @@ export interface Player {
   client_ip: string
   user_agent: string
   latency_ms: number
+  role?: 'PLAYER' | 'GM' | string
+  membership_status?: 'ACTIVE' | 'REVOKED' | string
   created_at: string
   last_seen: string
   inventory?: InventoryItem[]
@@ -51,16 +57,108 @@ export interface SessionConfig {
   map_grid_color: string
   map_grid_opacity: number
   current_turn_index: number
+  active_campaign_id?: string
+}
+
+export interface Campaign {
+  id: string
+  name: string
+  description: string
+  system_name: string
+  status: 'ACTIVE' | 'ARCHIVED' | string
+  created_at: string
+  updated_at: string
+}
+
+export interface CampaignSession {
+  id: string
+  campaign_id: string
+  title: string
+  status: 'PLANNED' | 'ACTIVE' | 'PAUSED' | 'CLOSED' | string
+  started_at: string
+  ended_at?: string
+  created_at: string
+}
+
+export interface CampaignNote {
+  id: string
+  campaign_id: string
+  owner_id: string
+  owner_name: string
+  title: string
+  body: string
+  category: string
+  visibility: NoteVisibility | string
+  recipient_ids: string[]
+  allow_edit: boolean
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatMessage {
+  id: string
+  campaign_id: string
+  session_id: string
+  author_id: string
+  author_name: string
+  author_role: string
+  author_color: string
+  body: string
+  visibility: ChatVisibility | string
+  recipient_ids: string[]
+  command_id?: string
+  created_at: string
+}
+
+export interface RollTableEntry {
+  id: string
+  label: string
+  weight: number
+  detail?: string
+}
+
+export interface RollTable {
+  id: string
+  campaign_id: string
+  name: string
+  description: string
+  entries: RollTableEntry[]
+  created_at: string
+}
+
+export interface AuditEvent {
+  id: number
+  campaign_id: string
+  actor_id: string
+  actor_name: string
+  action: string
+  summary: string
+  created_at: string
+}
+
+export interface DiceTerm {
+  kind: 'dice' | 'constant'
+  notation?: string
+  count?: number
+  sides?: number
+  rolls?: number[]
+  kept?: number[]
+  subtotal?: number
+  value: number
+  sign: number
 }
 
 export interface DiceDetail {
   notation: string
+  normalized_expression?: string
   count: number
   sides: number
   modifier: number
   rolls: number[]
   subtotal: number
   total: number
+  terms?: DiceTerm[]
   is_critical: boolean
   is_fumble: boolean
 }
@@ -100,7 +198,10 @@ export interface RollBroadcast {
   race_icon: string
   set_type: 'DICE' | 'COIN' | 'MAGIC_8_BALL' | 'SPINNER' | 'WHEEL'
   result_summary: string
-  detail: DiceDetail | CoinDetail | Magic8Detail | SpinnerDetail | WheelDetail | Record<string, unknown>
+  detail: DiceDetail | CoinDetail | Magic8Detail | SpinnerDetail | WheelDetail | Record<string, unknown> | null
+  visibility?: RollVisibility
+  command_id?: string
+  masked?: boolean
   is_critical?: boolean
   is_fumble?: boolean
   is_edge?: boolean
@@ -110,10 +211,14 @@ export interface RollBroadcast {
 export interface ActionLogEntry {
   id: number
   session_id: string
+  campaign_id?: string
   player_id: string
+  roller_id?: string
   player_name: string
   action_type: string
   details: string
+  visibility?: RollVisibility | string
+  command_id?: string
   result_json: unknown
   created_at: string
 }
@@ -137,9 +242,17 @@ export interface MapEntity {
 }
 
 export interface StateSnapshot {
+  sequence?: number
   session: SessionConfig
+  active_campaign?: Campaign
+  campaigns?: Campaign[]
+  campaign_sessions?: CampaignSession[]
   players: Player[]
   map_entities: MapEntity[]
+  campaign_notes?: CampaignNote[]
+  chat_messages?: ChatMessage[]
+  roll_tables?: RollTable[]
+  audit_events?: AuditEvent[]
   current_turn_index: number
   active_player_id: string
   current_turn_rolls: RollBroadcast[]

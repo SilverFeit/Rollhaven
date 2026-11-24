@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -75,7 +76,7 @@ func TestHealthAndDMAuth(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		t.Fatal(err)
 	}
-	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Rollhaven" || health["version"] != "1.3.0" || health["license"] != "MIT" {
+	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Rollhaven" || health["version"] != "1.4.0" || health["license"] != "MIT" {
 		t.Fatalf("unexpected health response: %+v", health)
 	}
 
@@ -635,5 +636,311 @@ func TestDMAllFiveDecisionSetsAndMapEntities(t *testing.T) {
 		if len(snap.MapEntities) == 0 {
 			break
 		}
+	}
+}
+
+func TestFoundryCompanionCampaignsPrivacyNotesChatAndBackup(t *testing.T) {
+	_, ts := setupTestServer(t)
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Connect DM, Player 1 (Aria), and Player 2 (Borin)
+	dmConn, _, err := websocket.Dial(ctx, wsURL+"?role=dm&pin=8492", nil)
+	if err != nil {
+		t.Fatalf("dial dm: %v", err)
+	}
+	defer dmConn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+
+	p1Conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial p1: %v", err)
+	}
+	defer p1Conn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, p1Conn, "STATE_SYNC")
+
+	j1, _ := json.Marshal(map[string]any{"name": "Aria", "initiative": 18, "race": "elf", "color": "#a855f7"})
+	if err := wsjson.Write(ctx, p1Conn, server.WSMessage{Event: "JOIN_ROOM", Payload: j1}); err != nil {
+		t.Fatal(err)
+	}
+	p1ID := readUntilEvent(t, ctx, p1Conn, "JOIN_ACK").PlayerID
+
+	p2Conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial p2: %v", err)
+	}
+	defer p2Conn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, p2Conn, "STATE_SYNC")
+
+	j2, _ := json.Marshal(map[string]any{"name": "Borin", "initiative": 12, "race": "dwarf", "color": "#f59e0b"})
+	if err := wsjson.Write(ctx, p2Conn, server.WSMessage{Event: "JOIN_ROOM", Payload: j2}); err != nil {
+		t.Fatal(err)
+	}
+	p2ID := readUntilEvent(t, ctx, p2Conn, "JOIN_ACK").PlayerID
+
+	// 1. Campaign creation + session lifecycle
+	createCamp, _ := json.Marshal(map[string]any{
+		"action":          "CREATE_CAMPAIGN",
+		"campaign_name":   "Tumba de Aniquilación",
+		"campaign_system": "D&D 5e",
+		"campaign_desc":   "Exploración en Chult",
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: createCamp}); err != nil {
+		t.Fatal(err)
+	}
+	var snap server.StateSnapshot
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if snap.ActiveCampaign.Name == "Tumba de Aniquilación" {
+			break
+		}
+	}
+
+	startSess, _ := json.Marshal(map[string]any{
+		"action":        "START_CAMPAIGN_SESSION",
+		"session_title": "Sesión 2 — Selva",
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: startSess}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if len(snap.CampaignSessions) > 0 && snap.CampaignSessions[0].Title == "Sesión 2 — Selva" {
+			break
+		}
+	}
+
+	// 2. Blind GM_ONLY roll with AST formula + commandId idempotency + strict server-side audience isolation
+	blindRoll, _ := json.Marshal(map[string]any{
+		"type":          "DICE",
+		"dice_notation": "2d20kh1",
+		"visibility":    "GM_ONLY",
+		"command_id":    "cmd-blind-1",
+	})
+	if err := wsjson.Write(ctx, p1Conn, server.WSMessage{Event: "ROLL_ACTION", Payload: blindRoll}); err != nil {
+		t.Fatal(err)
+	}
+
+	dmRB := readUntilEvent(t, ctx, dmConn, "RESULT_BROADCAST")
+	var dmRoll server.RollBroadcast
+	_ = json.Unmarshal(dmRB.Payload, &dmRoll)
+	if dmRoll.Masked || dmRoll.Detail == nil {
+		t.Fatalf("expected unmasked GM_ONLY roll for DM, got %+v", dmRoll)
+	}
+
+	p1RB := readUntilEvent(t, ctx, p1Conn, "RESULT_BROADCAST")
+	var p1Roll server.RollBroadcast
+	_ = json.Unmarshal(p1RB.Payload, &p1Roll)
+	if !p1Roll.Masked || p1Roll.Detail != nil {
+		t.Fatalf("expected masked blind roll for roller, got %+v", p1Roll)
+	}
+
+	// Duplicate retry with identical command_id must NOT duplicate action_log entries
+	if err := wsjson.Write(ctx, p1Conn, server.WSMessage{Event: "ROLL_ACTION", Payload: blindRoll}); err != nil {
+		t.Fatal(err)
+	}
+	_ = readUntilEvent(t, ctx, p1Conn, "RESULT_BROADCAST")
+
+	dmStateResp, err := http.Get(ts.URL + "/api/v1/state?role=dm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dmState server.StateSnapshot
+	_ = json.NewDecoder(dmStateResp.Body).Decode(&dmState)
+	dmStateResp.Body.Close()
+
+	blindCount := 0
+	for _, entry := range dmState.ActionLog {
+		if entry.CommandID == "cmd-blind-1" {
+			blindCount++
+		}
+	}
+	if blindCount != 1 {
+		t.Fatalf("expected exactly 1 log entry for idempotent command_id, got %d", blindCount)
+	}
+
+	// Also send ROLLER_ONLY roll by Aria and ensure Borin NEVER sees Aria's private or blind rolls via /api/v1/state
+	privRoll, _ := json.Marshal(map[string]any{
+		"type":          "DICE",
+		"dice_notation": "1d20+5",
+		"visibility":    "ROLLER_ONLY",
+		"command_id":    "cmd-priv-1",
+	})
+	if err := wsjson.Write(ctx, p1Conn, server.WSMessage{Event: "ROLL_ACTION", Payload: privRoll}); err != nil {
+		t.Fatal(err)
+	}
+	_ = readUntilEvent(t, ctx, p1Conn, "RESULT_BROADCAST")
+
+	p2StateResp, err := http.Get(ts.URL + "/api/v1/state?player_id=" + p2ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p2State server.StateSnapshot
+	_ = json.NewDecoder(p2StateResp.Body).Decode(&p2State)
+	p2StateResp.Body.Close()
+	for _, entry := range p2State.ActionLog {
+		if entry.CommandID == "cmd-blind-1" || entry.CommandID == "cmd-priv-1" {
+			t.Fatalf("Borin received restricted roll log entry: %+v", entry)
+		}
+	}
+
+	// 3. Notes isolation + optimistic version conflict (409 Conflict)
+	noteReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/notes", strings.NewReader(`{
+		"title": "Secreto de Aria",
+		"body": "Llave escondida",
+		"visibility": "PRIVATE",
+		"allow_edit": false
+	}`))
+	noteReq.Header.Set("Content-Type", "application/json")
+	noteReq.Header.Set("X-Player-ID", p1ID)
+	noteRes, err := http.DefaultClient.Do(noteReq)
+	if err != nil || noteRes.StatusCode != http.StatusCreated {
+		t.Fatalf("create private note failed: err=%v status=%v", err, noteRes)
+	}
+	noteRes.Body.Close()
+
+	p2NotesResp, err := http.Get(ts.URL + "/api/v1/notes?player_id=" + p2ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p2NotesPayload struct {
+		Notes []store.CampaignNote `json:"notes"`
+	}
+	_ = json.NewDecoder(p2NotesResp.Body).Decode(&p2NotesPayload)
+	p2NotesResp.Body.Close()
+	if len(p2NotesPayload.Notes) != 0 {
+		t.Fatalf("Borin must not see Aria's PRIVATE note, got %+v", p2NotesPayload.Notes)
+	}
+
+	sharedReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/notes", strings.NewReader(`{
+		"title": "Diario del Grupo",
+		"body": "Dia 1",
+		"visibility": "CAMPAIGN",
+		"allow_edit": true
+	}`))
+	sharedReq.Header.Set("Content-Type", "application/json")
+	sharedReq.Header.Set("X-Player-ID", p1ID)
+	sharedRes, err := http.DefaultClient.Do(sharedReq)
+	if err != nil || sharedRes.StatusCode != http.StatusCreated {
+		t.Fatalf("create campaign note failed: err=%v status=%v", err, sharedRes)
+	}
+	var createdNote store.CampaignNote
+	_ = json.NewDecoder(sharedRes.Body).Decode(&createdNote)
+	sharedRes.Body.Close()
+
+	patchOK, _ := http.NewRequest(http.MethodPatch, ts.URL+"/api/v1/notes/"+createdNote.ID, strings.NewReader(`{
+		"expected_version": 1,
+		"title": "Diario del Grupo",
+		"body": "Dia 1 y 2"
+	}`))
+	patchOK.Header.Set("Content-Type", "application/json")
+	patchOK.Header.Set("X-Player-ID", p2ID)
+	patchOKRes, err := http.DefaultClient.Do(patchOK)
+	if err != nil || patchOKRes.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on collaborative note update, got %d (%v)", patchOKRes.StatusCode, err)
+	}
+	patchOKRes.Body.Close()
+
+	// Stale expected_version=1 must fail with 409 Conflict
+	patchStale, _ := http.NewRequest(http.MethodPatch, ts.URL+"/api/v1/notes/"+createdNote.ID, strings.NewReader(`{
+		"expected_version": 1,
+		"title": "Diario del Grupo",
+		"body": "Sobrescritura conflictiva"
+	}`))
+	patchStale.Header.Set("Content-Type", "application/json")
+	patchStale.Header.Set("X-Player-ID", p1ID)
+	patchStaleRes, err := http.DefaultClient.Do(patchStale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchStaleRes.Body.Close()
+	if patchStaleRes.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict on stale note version, got %d", patchStaleRes.StatusCode)
+	}
+
+	// 4. GM_WHISPER chat isolation
+	whisperPayload, _ := json.Marshal(map[string]any{
+		"body":       "Susurro secreto al DM",
+		"visibility": "GM_WHISPER",
+		"command_id": "chat-wh-1",
+	})
+	if err := wsjson.Write(ctx, p1Conn, server.WSMessage{Event: "CHAT_SEND", Payload: whisperPayload}); err != nil {
+		t.Fatal(err)
+	}
+	_ = readUntilEvent(t, ctx, dmConn, "CHAT_MESSAGE")
+
+	p2AfterChat, _ := http.Get(ts.URL + "/api/v1/state?player_id=" + p2ID)
+	var p2ChatSnap server.StateSnapshot
+	_ = json.NewDecoder(p2AfterChat.Body).Decode(&p2ChatSnap)
+	p2AfterChat.Body.Close()
+	if len(p2ChatSnap.ChatMessages) != 0 {
+		t.Fatalf("Borin must not see Aria's GM_WHISPER, got %+v", p2ChatSnap.ChatMessages)
+	}
+
+	// 5. Membership revocation blocks open WS commands
+	revokePayload, _ := json.Marshal(map[string]any{
+		"action":            "SET_MEMBERSHIP_STATUS",
+		"target_player_id":  p2ID,
+		"membership_status": "REVOKED",
+	})
+	if err := wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: revokePayload}); err != nil {
+		t.Fatal(err)
+	}
+	revMsg := readUntilEvent(t, ctx, p2Conn, "MEMBERSHIP_REVOKED")
+	if revMsg.PlayerID != p2ID {
+		t.Fatalf("expected MEMBERSHIP_REVOKED for Borin")
+	}
+
+	// 6. Export campaign bundle (verify checksum rejection on tampering) & Full ZIP Backup/Restore in clean server
+	expResp, err := http.Get(ts.URL + "/api/v1/campaigns/export")
+	if err != nil || expResp.StatusCode != http.StatusOK {
+		t.Fatalf("export campaign failed: %v", err)
+	}
+	var bundle store.CampaignBundle
+	_ = json.NewDecoder(expResp.Body).Decode(&bundle)
+	expResp.Body.Close()
+
+	bundle.ChecksumSHA256 = "0000badchecksum"
+	badBundleBytes, _ := json.Marshal(bundle)
+	badImp, err := http.Post(ts.URL+"/api/v1/campaigns/import", "application/json", bytes.NewReader(badBundleBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badImp.Body.Close()
+	if badImp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on tampered SHA-256 bundle, got %d", badImp.StatusCode)
+	}
+
+	zipResp, err := http.Get(ts.URL + "/api/v1/backups/download")
+	if err != nil || zipResp.StatusCode != http.StatusOK {
+		t.Fatalf("backup zip failed: %v", err)
+	}
+	zipBytes, _ := io.ReadAll(zipResp.Body)
+	zipResp.Body.Close()
+
+	// Restore into a completely fresh server instance
+	_, tsClean := setupTestServer(t)
+	restoreResp, err := http.Post(tsClean.URL+"/api/v1/backups/restore", "application/zip", bytes.NewReader(zipBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreResp.Body.Close()
+	if restoreResp.StatusCode != http.StatusOK {
+		t.Fatalf("restore zip failed with status %d", restoreResp.StatusCode)
+	}
+
+	cleanStateResp, err := http.Get(tsClean.URL + "/api/v1/state?role=dm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restoredSnap server.StateSnapshot
+	_ = json.NewDecoder(cleanStateResp.Body).Decode(&restoredSnap)
+	cleanStateResp.Body.Close()
+	if restoredSnap.ActiveCampaign.Name != "Tumba de Aniquilación" || len(restoredSnap.Players) != 2 {
+		t.Fatalf("expected restored campaign & 2 players, got %s players=%d", restoredSnap.ActiveCampaign.Name, len(restoredSnap.Players))
 	}
 }
