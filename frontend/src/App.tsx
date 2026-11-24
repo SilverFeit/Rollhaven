@@ -22,6 +22,7 @@ import { AppFooter } from './components/AppFooter'
 import { InitiativeOverlayTracker } from './components/InitiativeOverlayTracker'
 import { CharacterWizard } from './components/CharacterWizard'
 import { InteractiveCharacterSheet } from './components/InteractiveCharacterSheet'
+import { ActionChatTracker } from './components/ActionChatTracker'
 
 type DrawerKind = null | 'SHEET' | 'DECISIONS' | 'COMPANION' | 'INVENTORY' | 'NOTES' | 'RACE'
 
@@ -43,6 +44,7 @@ const PlayerWorkspace: React.FC = () => {
 
   const [drawer, setDrawer] = useState<DrawerKind>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [trackerOpen, setTrackerOpen] = useState<boolean>(() => window.innerWidth >= 1024)
   const [focusTarget, setFocusTarget] = useState<{ x: number; y: number; tick: number } | null>(null)
 
   const currentPlayer = snapshot?.players.find((p) => p.id === playerID)
@@ -131,12 +133,22 @@ const PlayerWorkspace: React.FC = () => {
 
           <button
             type="button"
+            onClick={() => setTrackerOpen((v) => !v)}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition ${
+              trackerOpen ? 'bg-violet-600 text-white' : 'bg-[#120d22] text-slate-300 border border-violet-500/25'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" /> Tracker/Chat
+          </button>
+
+          <button
+            type="button"
             onClick={() => setDrawer((d) => (d === 'COMPANION' ? null : 'COMPANION'))}
             className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition ${
               drawer === 'COMPANION' ? 'bg-violet-600 text-white' : 'bg-[#120d22] text-slate-300 border border-violet-500/25'
             }`}
           >
-            <MessageSquare className="w-3.5 h-3.5" /> Chat
+            Diarios
           </button>
 
           <button
@@ -232,6 +244,35 @@ const PlayerWorkspace: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Floating Right Action Chat & Interactive Roll Tracker */}
+        {trackerOpen && (
+          <aside className="absolute top-20 sm:top-3 bottom-16 right-2 sm:right-3 z-20 w-[calc(100vw-1rem)] sm:w-80 rounded-2xl border border-violet-500/35 bg-[#120d22]/90 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="px-3.5 py-2 border-b border-violet-500/20 bg-[#090712]/80 flex items-center justify-between">
+              <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-200">
+                Tracker de Tiradas &amp; Chat
+              </span>
+              <button
+                type="button"
+                onClick={() => setTrackerOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden p-3">
+              <ActionChatTracker
+                rolls={snapshot.recent_rolls ?? snapshot.current_turn_rolls ?? []}
+                messages={snapshot.chat_messages ?? []}
+                players={snapshot.players}
+                localPlayerID={playerID}
+                activeCharacter={assignedCharacter}
+                onRollAction={(payload) => sendMessage('ROLL_ACTION', { ...payload, visibility: 'PUBLIC' })}
+                onSendChat={(payload) => sendMessage('CHAT_SEND', payload)}
+              />
+            </div>
+          </aside>
+        )}
 
         {/* Floating Slide-Over Drawer for Character Sheet / Decisions / Chat / Inventory / Notes */}
         {drawer && (
