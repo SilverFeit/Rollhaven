@@ -21,6 +21,17 @@ export interface InventoryItem {
   description: string
 }
 
+export interface QuickSheetStats {
+  hp_current?: number
+  hp_max?: number
+  hp_temp?: number
+  ac?: number
+  speed?: number
+  proficiency?: number
+  abilities?: Record<'FUE' | 'DES' | 'CON' | 'INT' | 'SAB' | 'CAR', number>
+  macros?: { id: string; label: string; formula: string }[]
+}
+
 export interface Player {
   id: string
   session_id: string
@@ -40,10 +51,37 @@ export interface Player {
   latency_ms: number
   role?: 'PLAYER' | 'GM' | string
   membership_status?: 'ACTIVE' | 'REVOKED' | string
+  conditions?: string[]
+  aura_radius?: number
+  aura_color?: string
+  stats_json?: QuickSheetStats
   created_at: string
   last_seen: string
   inventory?: InventoryItem[]
   notes?: string
+}
+
+export interface SceneCard {
+  id: string
+  title: string
+  subtitle: string
+  kind: 'aspect' | 'clock' | string
+  segments: number
+  filled: number
+}
+
+export interface MapScene {
+  id: string
+  campaign_id: string
+  name: string
+  map_rows: number
+  map_cols: number
+  map_image_path: string
+  map_grid_color: string
+  map_grid_opacity: number
+  fog_enabled: boolean
+  fog_revealed: string[]
+  created_at: string
 }
 
 export interface SessionConfig {
@@ -58,6 +96,10 @@ export interface SessionConfig {
   map_grid_opacity: number
   current_turn_index: number
   active_campaign_id?: string
+  fog_enabled?: boolean
+  fog_revealed?: string[]
+  round_number?: number
+  scene_cards?: SceneCard[]
 }
 
 export interface Campaign {
@@ -238,7 +280,51 @@ export interface MapEntity {
   hp_max: number
   note: string
   is_hidden: boolean
+  conditions?: string[]
+  aura_radius?: number
+  aura_color?: string
+  in_initiative?: boolean
+  initiative?: number
   created_at: string
+}
+
+export interface TemporaryMapEvent {
+  kind: 'ping' | 'ruler' | 'aoe' | 'draw' | 'sound'
+  sender_name?: string
+  color?: string
+  x?: number
+  y?: number
+  from_x?: number
+  from_y?: number
+  to_x?: number
+  to_y?: number
+  shape?: 'sphere' | 'cone' | 'cube' | 'line'
+  origin_x?: number
+  origin_y?: number
+  target_x?: number
+  target_y?: number
+  radius_ft?: number
+  points?: { x: number; y: number }[]
+  clear?: boolean
+  sound_id?: string
+  label?: string
+  receivedAt?: number
+}
+
+export interface TunnelStatus {
+  active: boolean
+  public_url: string
+  provider: string
+  error_message?: string
+}
+
+export interface TLSStatus {
+  ca_cert_http_url: string
+  ca_fingerprint_sha256: string
+  sslip_https_url: string
+  host_os: string
+  host_trusted: boolean
+  tunnel: TunnelStatus
 }
 
 export interface StateSnapshot {
@@ -249,6 +335,7 @@ export interface StateSnapshot {
   campaign_sessions?: CampaignSession[]
   players: Player[]
   map_entities: MapEntity[]
+  map_scenes?: MapScene[]
   campaign_notes?: CampaignNote[]
   chat_messages?: ChatMessage[]
   roll_tables?: RollTable[]

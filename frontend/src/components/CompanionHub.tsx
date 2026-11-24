@@ -7,14 +7,18 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  Library,
   Lock,
+  MapPin,
   MessageSquare,
   Plus,
+  Search,
   Send,
   Shield,
   Sparkles,
   Trash2,
   Users,
+  Wand2,
 } from 'lucide-react'
 import {
   Campaign,
@@ -27,6 +31,13 @@ import {
   RollTable,
   RollVisibility,
 } from '../types'
+import {
+  SRD_MONSTERS,
+  SRD_SPELLS_AND_ITEMS,
+  generateMagicShop,
+  generateNPC,
+  generateTavern,
+} from '../lib/srdCompendiumAndGenerators'
 
 interface CompanionHubProps {
   campaign?: Campaign
@@ -43,7 +54,7 @@ interface CompanionHubProps {
   onSendMessage: (event: string, payload: Record<string, unknown>) => void
 }
 
-type CompanionTab = 'CHAT' | 'NOTES' | 'TABLES'
+type CompanionTab = 'CHAT' | 'NOTES' | 'TABLES' | 'SRD' | 'GENERATORS'
 
 const NOTE_CATEGORIES = ['Diario', 'Pista', 'Lore', 'PNJ', 'Misión'] as const
 
@@ -94,6 +105,12 @@ export const CompanionHub: React.FC<CompanionHubProps> = ({
   const [tableName, setTableName] = useState('')
   const [tableDesc, setTableDesc] = useState('')
   const [tableRowsText, setTableRowsText] = useState('Monedas de oro (3d10) | 40\nGema arcana | 25\nEmbestida sorpresa | 20\nReliquia olvidada | 15')
+
+  // SRD Compendium & Dungeoneer Procedural Generators state
+  const [srdQuery, setSrdQuery] = useState('')
+  const [genTavern, setGenTavern] = useState(() => generateTavern())
+  const [genNPC, setGenNPC] = useState(() => generateNPC())
+  const [genShop, setGenShop] = useState(() => generateMagicShop())
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
@@ -224,11 +241,11 @@ export const CompanionHub: React.FC<CompanionHubProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 bg-[#090712]/80 p-1 rounded-xl border border-violet-500/20">
+        <div className="flex flex-wrap items-center gap-1 bg-[#090712]/80 p-1 rounded-xl border border-violet-500/20">
           <button
             type="button"
             onClick={() => setSubTab('CHAT')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
               subTab === 'CHAT' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -238,7 +255,7 @@ export const CompanionHub: React.FC<CompanionHubProps> = ({
           <button
             type="button"
             onClick={() => setSubTab('NOTES')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
               subTab === 'NOTES' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -248,13 +265,35 @@ export const CompanionHub: React.FC<CompanionHubProps> = ({
           <button
             type="button"
             onClick={() => setSubTab('TABLES')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
               subTab === 'TABLES' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Dices className="w-3.5 h-3.5" />
             Tablas ({rollTables.length})
           </button>
+          <button
+            type="button"
+            onClick={() => setSubTab('SRD')}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+              subTab === 'SRD' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Library className="w-3.5 h-3.5" />
+            Compendio SRD
+          </button>
+          {isDM && (
+            <button
+              type="button"
+              onClick={() => setSubTab('GENERATORS')}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+                subTab === 'GENERATORS' ? 'bg-amber-500 text-slate-950' : 'text-amber-300 hover:bg-white/5'
+              }`}
+            >
+              <Wand2 className="w-3.5 h-3.5" />
+              Generadores
+            </button>
+          )}
         </div>
       </div>
 
@@ -726,6 +765,226 @@ export const CompanionHub: React.FC<CompanionHubProps> = ({
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: OFFLINE SRD COMPENDIUM (Dungeoneer monsters/spells/items) */}
+      {subTab === 'SRD' && (
+        <div className="space-y-3 text-xs">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={srdQuery}
+              onChange={(e) => setSrdQuery(e.target.value)}
+              placeholder="Buscar monstruo, conjuro u objeto SRD (ej. Goblin, Bola de Fuego, Poción)..."
+              className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#090712] border border-violet-500/25 text-slate-100"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-80 overflow-y-auto pr-1">
+            {SRD_MONSTERS.filter(
+              (m) =>
+                !srdQuery.trim() ||
+                m.name.toLowerCase().includes(srdQuery.toLowerCase()) ||
+                m.traits.toLowerCase().includes(srdQuery.toLowerCase())
+            ).map((m) => (
+              <div key={m.name} className="rounded-xl p-3 bg-[#090712]/75 border border-rose-500/25 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-amber-200">{m.name}</span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-950/60 text-rose-200 border border-rose-500/30">
+                    CR {m.cr} · CA {m.ac} · {m.hp} HP
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  Ataque +{m.attackBonus} ({m.damage}) · {m.speed} · {m.traits}
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {isDM && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onSendMessage('DM_OVERRIDE', {
+                          action: 'ADD_MAP_ENTITY',
+                          entity_kind: 'enemy',
+                          entity_name: m.name,
+                          entity_size: m.size,
+                          entity_color: '#dc2626',
+                          entity_hp_current: m.hp,
+                          entity_hp_max: m.hp,
+                          entity_note: `CA ${m.ac} · CR ${m.cr}`,
+                          entity_hidden: false,
+                          target_x: 1,
+                          target_y: 1,
+                          pin: dmPIN,
+                        })
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold flex items-center gap-1"
+                    >
+                      <MapPin className="w-3 h-3" /> Enviar al Mapa
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onSendMessage('CHAT_SEND', {
+                        body: `📖 **${m.name}** (CR ${m.cr}) — CA ${m.ac}, ${m.hp} HP, Ataque +${m.attackBonus} (${m.damage}). ${m.traits}`,
+                        visibility: 'CAMPAIGN',
+                        command_id: genCmdID(),
+                        ...dmAuthExtra,
+                      })
+                    }
+                    className="px-2.5 py-1 rounded-lg bg-[#120d22] border border-violet-500/30 text-violet-200 font-semibold"
+                  >
+                    Compartir en Chat
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {SRD_SPELLS_AND_ITEMS.filter(
+              (it) =>
+                !srdQuery.trim() ||
+                it.name.toLowerCase().includes(srdQuery.toLowerCase()) ||
+                it.summary.toLowerCase().includes(srdQuery.toLowerCase())
+            ).map((it) => (
+              <div key={it.name} className="rounded-xl p-3 bg-[#090712]/75 border border-violet-500/25 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-violet-200">{it.name}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 font-semibold">
+                    {it.kind}
+                  </span>
+                </div>
+                <div className="text-[10px] text-amber-300/90 font-semibold">{it.tag}</div>
+                <div className="text-[11px] text-slate-400">{it.summary}</div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSendMessage('CHAT_SEND', {
+                      body: `✨ [${it.kind}] **${it.name}** (${it.tag}): ${it.summary}`,
+                      visibility: 'CAMPAIGN',
+                      command_id: genCmdID(),
+                      ...dmAuthExtra,
+                    })
+                  }
+                  className="px-2.5 py-1 rounded-lg bg-[#120d22] border border-violet-500/30 text-violet-200 font-semibold"
+                >
+                  Compartir en Chat
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: DM PROCEDURAL GENERATORS (Dungeoneer Tavern / NPC / Magic Shop) */}
+      {isDM && subTab === 'GENERATORS' && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          {/* Tavern Generator */}
+          <div className="rounded-xl p-3.5 bg-[#090712]/75 border border-amber-500/25 flex flex-col justify-between space-y-2.5">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-300">🍺 Taberna Instantánea</span>
+                <button type="button" onClick={() => setGenTavern(generateTavern())} className="text-violet-300 hover:underline">
+                  Regenerar
+                </button>
+              </div>
+              <div className="font-extrabold text-white text-sm">{genTavern.title}</div>
+              <div className="text-[11px] text-slate-400">Tabernero: {genTavern.keeper}</div>
+              <div className="text-[11px] text-slate-300">Ambiente: {genTavern.vibe}</div>
+              <div className="text-[11px] text-amber-200/90">Menú: {genTavern.menu.join(' · ')}</div>
+              <div className="text-[11px] text-slate-400">Rumor: {genTavern.rumors[0]}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onSendMessage('NOTE_CREATE', {
+                  title: `Taberna: ${genTavern.title}`,
+                  category: 'Lore',
+                  body: `Tabernero: ${genTavern.keeper}\nAmbiente: ${genTavern.vibe}\nMenú: ${genTavern.menu.join(', ')}\nRumores:\n- ${genTavern.rumors.join('\n- ')}`,
+                  visibility: 'CAMPAIGN',
+                  ...dmAuthExtra,
+                })
+              }
+              className="w-full py-1.5 rounded-lg bg-amber-500 text-slate-950 font-bold"
+            >
+              Guardar como Handout
+            </button>
+          </div>
+
+          {/* NPC Generator */}
+          <div className="rounded-xl p-3.5 bg-[#090712]/75 border border-violet-500/25 flex flex-col justify-between space-y-2.5">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-violet-300">🧑 PNJ al Vuelo</span>
+                <button type="button" onClick={() => setGenNPC(generateNPC())} className="text-amber-300 hover:underline">
+                  Regenerar
+                </button>
+              </div>
+              <div className="font-extrabold text-white text-sm">{genNPC.name}</div>
+              <div className="text-[11px] text-slate-400">{genNPC.race} · {genNPC.role}</div>
+              <div className="text-[11px] text-slate-300">Rasgo: {genNPC.quirk}</div>
+              <div className="text-[11px] text-rose-300/90">Secreto DM: {genNPC.secret}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onSendMessage('DM_OVERRIDE', {
+                  action: 'ADD_MAP_ENTITY',
+                  entity_kind: 'npc',
+                  entity_name: genNPC.name,
+                  entity_size: 1,
+                  entity_color: '#3b82f6',
+                  entity_hp_current: 12,
+                  entity_hp_max: 12,
+                  entity_note: `${genNPC.role} (${genNPC.quirk})`,
+                  target_x: 2,
+                  target_y: 2,
+                  pin: dmPIN,
+                })
+              }
+              className="w-full py-1.5 rounded-lg bg-violet-600 text-white font-bold"
+            >
+              Añadir PNJ al Mapa
+            </button>
+          </div>
+
+          {/* Magic Shop Generator */}
+          <div className="rounded-xl p-3.5 bg-[#090712]/75 border border-cyan-500/25 flex flex-col justify-between space-y-2.5">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-cyan-300">🛍️ Tienda &amp; Botín</span>
+                <button type="button" onClick={() => setGenShop(generateMagicShop())} className="text-amber-300 hover:underline">
+                  Regenerar
+                </button>
+              </div>
+              <div className="font-extrabold text-white text-sm">{genShop.name}</div>
+              <div className="text-[11px] text-slate-400">{genShop.keeper}</div>
+              <div className="space-y-1 text-[11px]">
+                {genShop.stock.map((s) => (
+                  <div key={s.name} className="flex justify-between gap-2 text-slate-300">
+                    <span className="truncate">{s.name}</span>
+                    <span className="text-amber-300 font-mono shrink-0">{s.tag}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onSendMessage('NOTE_CREATE', {
+                  title: `Tienda: ${genShop.name}`,
+                  category: 'Misión',
+                  body: `Mercader: ${genShop.keeper}\nInventario:\n` + genShop.stock.map((s) => `- ${s.name} (${s.tag}): ${s.summary}`).join('\n'),
+                  visibility: 'CAMPAIGN',
+                  ...dmAuthExtra,
+                })
+              }
+              className="w-full py-1.5 rounded-lg bg-cyan-500 text-slate-950 font-bold"
+            >
+              Compartir Catálogo
+            </button>
           </div>
         </div>
       )}

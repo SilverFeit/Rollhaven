@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -21,19 +22,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// Server encapsulates the HTTP router, WebSocket hub, storage, and upload paths.
+// Server encapsulates the HTTP router, WebSocket hub, storage, TLS/tunnel managers, and upload paths.
 type Server struct {
-	Router    *chi.Mux
-	Hub       *Hub
-	Store     *store.Store
-	DataDir   string
-	UploadDir string
-	LanIP     string
-	Port      int
-	DMPIN     string
-	Version   string
-	TLSConfig *tls.Config
-	CACertPEM []byte
+	Router              *chi.Mux
+	Hub                 *Hub
+	Store               *store.Store
+	Tunnel              *TunnelManager
+	DataDir             string
+	UploadDir           string
+	LanIP               string
+	Port                int
+	DMPIN               string
+	Version             string
+	TLSConfig           *tls.Config
+	CACertPEM           []byte
+	CACertPath          string
+	CAFingerprintSHA256 string
 }
 
 // GenerateSessionPIN creates a random 4-digit numeric PIN using crypto/rand.
@@ -68,19 +72,24 @@ func New(st *store.Store, dataDir, lanIP string, port int, dmPIN string) (*Serve
 		return nil, fmt.Errorf("init tls assets: %w", err)
 	}
 
+	tm := NewTunnelManager()
 	hub := NewHub(st, lanIP, port, dmPIN)
+	hub.tunnel = tm
 	s := &Server{
-		Router:    chi.NewRouter(),
-		Hub:       hub,
-		Store:     st,
-		DataDir:   dataDir,
-		UploadDir: uploadDir,
-		LanIP:     lanIP,
-		Port:      port,
-		DMPIN:     dmPIN,
-		Version:   "1.4.0",
-		TLSConfig: tlsAssets.Config,
-		CACertPEM: tlsAssets.CACertPEM,
+		Router:              chi.NewRouter(),
+		Hub:                 hub,
+		Store:               st,
+		Tunnel:              tm,
+		DataDir:             dataDir,
+		UploadDir:           uploadDir,
+		LanIP:               lanIP,
+		Port:                port,
+		DMPIN:               dmPIN,
+		Version:             "1.5.0",
+		TLSConfig:           tlsAssets.Config,
+		CACertPEM:           tlsAssets.CACertPEM,
+		CACertPath:          tlsAssets.CACertPath,
+		CAFingerprintSHA256: tlsAssets.CAFingerprintSHA256,
 	}
 	s.mountRoutes()
 	return s, nil
@@ -115,6 +124,10 @@ func (s *Server) mountRoutes() {
 		api.Get("/health", s.handleHealth)
 		api.Get("/state", s.handlePublicState)
 		api.Get("/tls/ca.crt", s.handleDownloadCACert)
+		api.Get("/tls/status", s.handleTLSStatus)
+		api.Post("/tls/trust-host", s.handleTrustCAHost)
+		api.Post("/tls/tunnel/start", s.handleTunnelStart)
+		api.Post("/tls/tunnel/stop", s.handleTunnelStop)
 
 		api.Get("/dm/status", s.handleDMStatus)
 		api.Post("/dm/auth", s.handleDMAuth)
@@ -182,7 +195,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ver := s.Version
 	if ver == "" {
-		ver = "1.4.0"
+		ver = "1.5.0"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -222,6 +235,63 @@ func (s *Server) handleDownloadCACert(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
 	w.Header().Set("Content-Disposition", `attachment; filename="rollhaven-ca.crt"`)
 	_, _ = w.Write(s.CACertPEM)
+}
+
+func (s *Server) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
+	sslipHost := BuildSSLIPHost(s.LanIP)
+	sslipURL := ""
+	if sslipHost != "" {
+		sslipURL = fmt.Sprintf("https://%s:%d", sslipHost, s.Port)
+	}
+	caHTTPURL := fmt.Sprintf("http://%s:%d/api/v1/tls/ca.crt", s.LanIP, s.Port)
+	if strings.TrimSpace(s.LanIP) == "" {
+		caHTTPURL = fmt.Sprintf("http://127.0.0.1:%d/api/v1/tls/ca.crt", s.Port)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ca_cert_http_url":      caHTTPURL,
+		"ca_fingerprint_sha256": s.CAFingerprintSHA256,
+		"sslip_https_url":       sslipURL,
+		"host_os":               runtime.GOOS,
+		"host_trusted":          IsHostCATrusted(s.CACertPath),
+		"tunnel":                s.Tunnel.Status(),
+	})
+}
+
+func (s *Server) handleTrustCAHost(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede confiar el certificado en el host"})
+		return
+	}
+	trusted, msg, err := TrustCAOnHost(s.CACertPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"trusted": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"trusted": trusted,
+		"message": msg,
+	})
+}
+
+func (s *Server) handleTunnelStart(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede controlar el túnel público"})
+		return
+	}
+	st := s.Tunnel.Start(s.Port)
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleTunnelStop(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede controlar el túnel público"})
+		return
+	}
+	_ = s.Tunnel.Stop()
+	writeJSON(w, http.StatusOK, s.Tunnel.Status())
 }
 
 func (s *Server) handlePublicState(w http.ResponseWriter, r *http.Request) {

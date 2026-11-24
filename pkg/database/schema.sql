@@ -14,7 +14,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     map_grid_color TEXT DEFAULT '#ffffff',
     map_grid_opacity REAL DEFAULT 0.35,
     current_turn_index INTEGER DEFAULT 0,
-    active_campaign_id TEXT DEFAULT 'default'
+    active_campaign_id TEXT DEFAULT 'default',
+    fog_enabled INTEGER DEFAULT 0,
+    fog_revealed_json TEXT DEFAULT '[]',
+    round_number INTEGER DEFAULT 1,
+    scene_cards_json TEXT DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -58,6 +62,10 @@ CREATE TABLE IF NOT EXISTS players (
     latency_ms INTEGER DEFAULT 0,
     role TEXT DEFAULT 'PLAYER',
     membership_status TEXT DEFAULT 'ACTIVE',
+    conditions_json TEXT DEFAULT '[]',
+    aura_radius INTEGER DEFAULT 0,
+    aura_color TEXT DEFAULT '#a855f7',
+    stats_json TEXT DEFAULT '{}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(session_id) REFERENCES sessions(id)
@@ -114,8 +122,28 @@ CREATE TABLE IF NOT EXISTS map_entities (
     hp_max INTEGER DEFAULT 0,
     note TEXT DEFAULT '',
     is_hidden INTEGER DEFAULT 0,
+    conditions_json TEXT DEFAULT '[]',
+    aura_radius INTEGER DEFAULT 0,
+    aura_color TEXT DEFAULT '',
+    in_initiative INTEGER DEFAULT 0,
+    initiative INTEGER DEFAULT 10,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS map_scenes (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    map_rows INTEGER DEFAULT 12,
+    map_cols INTEGER DEFAULT 16,
+    map_image_path TEXT DEFAULT '',
+    map_grid_color TEXT DEFAULT '#ffffff',
+    map_grid_opacity REAL DEFAULT 0.35,
+    fog_enabled INTEGER DEFAULT 0,
+    fog_revealed_json TEXT DEFAULT '[]',
+    entities_json TEXT DEFAULT '[]',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS campaign_notes (

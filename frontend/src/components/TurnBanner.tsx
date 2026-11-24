@@ -7,6 +7,7 @@ interface TurnBannerProps {
   players: Player[]
   activePlayerID: string
   localPlayerID: string
+  roundNumber?: number
   currentTurnRolls: RollBroadcast[]
   lastBroadcast: RollBroadcast | null
   onEndTurn: () => void
@@ -16,6 +17,7 @@ export const TurnBanner: React.FC<TurnBannerProps> = ({
   players,
   activePlayerID,
   localPlayerID,
+  roundNumber = 1,
   currentTurnRolls,
   lastBroadcast,
   onEndTurn,
@@ -57,6 +59,9 @@ export const TurnBanner: React.FC<TurnBannerProps> = ({
                 >
                   <span className={`w-2 h-2 rounded-full ${isMyTurn ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
                   {isMyTurn ? '¡ES TU TURNO!' : 'Turno Activo'}
+                </span>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">
+                  Ronda {roundNumber}
                 </span>
               </div>
               <div className="text-sm sm:text-base font-bold text-white truncate mt-0.5">

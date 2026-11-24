@@ -13,19 +13,48 @@ import (
 
 const DefaultSessionID = "default-session"
 
-// Session represents the active tabletop room and tactical map settings.
+// SceneCard represents an index card or progress clock pinned to the active scene (Fari-inspired).
+type SceneCard struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle"`
+	Kind     string `json:"kind"` // aspect | clock
+	Segments int    `json:"segments"`
+	Filled   int    `json:"filled"`
+}
+
+// MapScene represents a saved tactical map scene preset (Ogres/PlanarAlly-inspired multi-scene).
+type MapScene struct {
+	ID             string    `json:"id"`
+	CampaignID     string    `json:"campaign_id"`
+	Name           string    `json:"name"`
+	MapRows        int       `json:"map_rows"`
+	MapCols        int       `json:"map_cols"`
+	MapImagePath   string    `json:"map_image_path"`
+	MapGridColor   string    `json:"map_grid_color"`
+	MapGridOpacity float64   `json:"map_grid_opacity"`
+	FogEnabled     bool      `json:"fog_enabled"`
+	FogRevealed    []string  `json:"fog_revealed"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// Session represents the active tabletop room, turn round, fog state, scene cards, and tactical map settings.
 type Session struct {
-	ID               string    `json:"id"`
-	CreatedAt        time.Time `json:"created_at"`
-	IsActive         bool      `json:"is_active"`
-	MapEnabled       bool      `json:"map_enabled"`
-	MapRows          int       `json:"map_rows"`
-	MapCols          int       `json:"map_cols"`
-	MapImagePath     string    `json:"map_image_path"`
-	MapGridColor     string    `json:"map_grid_color"`
-	MapGridOpacity   float64   `json:"map_grid_opacity"`
-	CurrentTurnIndex int       `json:"current_turn_index"`
-	ActiveCampaignID string    `json:"active_campaign_id"`
+	ID               string      `json:"id"`
+	CreatedAt        time.Time   `json:"created_at"`
+	IsActive         bool        `json:"is_active"`
+	MapEnabled       bool        `json:"map_enabled"`
+	MapRows          int         `json:"map_rows"`
+	MapCols          int         `json:"map_cols"`
+	MapImagePath     string      `json:"map_image_path"`
+	MapGridColor     string      `json:"map_grid_color"`
+	MapGridOpacity   float64     `json:"map_grid_opacity"`
+	CurrentTurnIndex int         `json:"current_turn_index"`
+	ActiveCampaignID string      `json:"active_campaign_id"`
+	FogEnabled       bool        `json:"fog_enabled"`
+	FogRevealed      []string    `json:"fog_revealed"`
+	RoundNumber      int         `json:"round_number"`
+	SceneCards       []SceneCard `json:"scene_cards"`
 }
 
 // Player represents a joined player or character token in the session.
@@ -48,6 +77,10 @@ type Player struct {
 	LatencyMS          int             `json:"latency_ms"`
 	Role               string          `json:"role"`
 	MembershipStatus   string          `json:"membership_status"`
+	Conditions         []string        `json:"conditions"`
+	AuraRadius         int             `json:"aura_radius"`
+	AuraColor          string          `json:"aura_color"`
+	StatsJSON          json.RawMessage `json:"stats_json,omitempty"`
 	CreatedAt          time.Time       `json:"created_at"`
 	LastSeen           time.Time       `json:"last_seen"`
 	Inventory          []InventoryItem `json:"inventory,omitempty"`
@@ -81,19 +114,24 @@ type ActionLogEntry struct {
 
 // MapEntity represents an enemy, trap, item, NPC, hazard, or interactive point placed by the DM on the tactical map.
 type MapEntity struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	Kind      string    `json:"kind"` // enemy | trap | item | npc | hazard | door
-	Name      string    `json:"name"`
-	X         int       `json:"x"`
-	Y         int       `json:"y"`
-	Size      int       `json:"size"` // 1 (1x1), 2 (2x2), 3 (3x3)
-	ColorHex  string    `json:"color_hex"`
-	HPCurrent int       `json:"hp_current"`
-	HPMax     int       `json:"hp_max"`
-	Note      string    `json:"note"`
-	IsHidden  bool      `json:"is_hidden"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	SessionID    string    `json:"session_id"`
+	Kind         string    `json:"kind"` // enemy | trap | item | npc | hazard | door
+	Name         string    `json:"name"`
+	X            int       `json:"x"`
+	Y            int       `json:"y"`
+	Size         int       `json:"size"` // 1 (1x1), 2 (2x2), 3 (3x3)
+	ColorHex     string    `json:"color_hex"`
+	HPCurrent    int       `json:"hp_current"`
+	HPMax        int       `json:"hp_max"`
+	Note         string    `json:"note"`
+	IsHidden     bool      `json:"is_hidden"`
+	Conditions   []string  `json:"conditions"`
+	AuraRadius   int       `json:"aura_radius"`
+	AuraColor    string    `json:"aura_color"`
+	InInitiative bool      `json:"in_initiative"`
+	Initiative   int       `json:"initiative"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // Store wraps all SQLite reads and writes for Rollhaven.
@@ -134,21 +172,37 @@ func (s *Store) ensureDefaults() error {
 // GetSession loads the active session configuration.
 func (s *Store) GetSession() (Session, error) {
 	var sess Session
-	var isActive, mapEnabled int
+	var isActive, mapEnabled, fogEnabled int
+	var fogStr, cardsStr string
 	err := s.db.QueryRow(`
-		SELECT id, created_at, is_active, map_enabled, map_rows, map_cols, map_image_path, map_grid_color, map_grid_opacity, current_turn_index, COALESCE(NULLIF(active_campaign_id, ''), 'default')
+		SELECT id, created_at, is_active, map_enabled, map_rows, map_cols, map_image_path, map_grid_color, map_grid_opacity, current_turn_index,
+		       COALESCE(NULLIF(active_campaign_id, ''), 'default'),
+		       COALESCE(fog_enabled, 0), COALESCE(NULLIF(fog_revealed_json, ''), '[]'),
+		       COALESCE(round_number, 1), COALESCE(NULLIF(scene_cards_json, ''), '[]')
 		FROM sessions WHERE id = ?
 	`, DefaultSessionID).Scan(
 		&sess.ID, &sess.CreatedAt, &isActive, &mapEnabled,
 		&sess.MapRows, &sess.MapCols, &sess.MapImagePath,
 		&sess.MapGridColor, &sess.MapGridOpacity, &sess.CurrentTurnIndex,
-		&sess.ActiveCampaignID,
+		&sess.ActiveCampaignID, &fogEnabled, &fogStr, &sess.RoundNumber, &cardsStr,
 	)
 	if err != nil {
 		return Session{}, fmt.Errorf("get session: %w", err)
 	}
 	sess.IsActive = isActive != 0
 	sess.MapEnabled = mapEnabled != 0
+	sess.FogEnabled = fogEnabled != 0
+	if sess.RoundNumber < 1 {
+		sess.RoundNumber = 1
+	}
+	_ = json.Unmarshal([]byte(fogStr), &sess.FogRevealed)
+	if sess.FogRevealed == nil {
+		sess.FogRevealed = []string{}
+	}
+	_ = json.Unmarshal([]byte(cardsStr), &sess.SceneCards)
+	if sess.SceneCards == nil {
+		sess.SceneCards = []SceneCard{}
+	}
 	return sess, nil
 }
 
@@ -333,18 +387,21 @@ func (s *Store) SetPlayerConnection(id string, connected bool, clientIP, userAge
 func (s *Store) GetPlayer(id string) (Player, error) {
 	var p Player
 	var tokenHidden, manualOrder, isConnected int
+	var condStr, statsStr string
 	err := s.db.QueryRow(`
 		SELECT id, session_id, name, initiative, race_icon, color_hex,
 		       character_sheet_path, token_x, token_y, token_hidden,
 		       turn_order, manual_order, is_connected, client_ip, user_agent,
 		       latency_ms, COALESCE(NULLIF(role, ''), 'PLAYER'), COALESCE(NULLIF(membership_status, ''), 'ACTIVE'),
+		       COALESCE(NULLIF(conditions_json, ''), '[]'), COALESCE(aura_radius, 0), COALESCE(NULLIF(aura_color, ''), '#a855f7'),
+		       COALESCE(NULLIF(stats_json, ''), '{}'),
 		       created_at, last_seen
 		FROM players WHERE id = ?
 	`, id).Scan(
 		&p.ID, &p.SessionID, &p.Name, &p.Initiative, &p.RaceIcon, &p.ColorHex,
 		&p.CharacterSheetPath, &p.TokenX, &p.TokenY, &tokenHidden,
 		&p.TurnOrder, &manualOrder, &isConnected, &p.ClientIP, &p.UserAgent,
-		&p.LatencyMS, &p.Role, &p.MembershipStatus, &p.CreatedAt, &p.LastSeen,
+		&p.LatencyMS, &p.Role, &p.MembershipStatus, &condStr, &p.AuraRadius, &p.AuraColor, &statsStr, &p.CreatedAt, &p.LastSeen,
 	)
 	if err != nil {
 		return Player{}, err
@@ -352,6 +409,11 @@ func (s *Store) GetPlayer(id string) (Player, error) {
 	p.TokenHidden = tokenHidden != 0
 	p.ManualOrder = manualOrder != 0
 	p.IsConnected = isConnected != 0
+	_ = json.Unmarshal([]byte(condStr), &p.Conditions)
+	if p.Conditions == nil {
+		p.Conditions = []string{}
+	}
+	p.StatsJSON = json.RawMessage(statsStr)
 	p.Inventory, _ = s.ListInventory(p.ID)
 	p.Notes, _ = s.GetPlayerNotes(p.ID)
 	return p, nil
@@ -364,6 +426,8 @@ func (s *Store) ListPlayersOrdered() ([]Player, error) {
 		       character_sheet_path, token_x, token_y, token_hidden,
 		       turn_order, manual_order, is_connected, client_ip, user_agent,
 		       latency_ms, COALESCE(NULLIF(role, ''), 'PLAYER'), COALESCE(NULLIF(membership_status, ''), 'ACTIVE'),
+		       COALESCE(NULLIF(conditions_json, ''), '[]'), COALESCE(aura_radius, 0), COALESCE(NULLIF(aura_color, ''), '#a855f7'),
+		       COALESCE(NULLIF(stats_json, ''), '{}'),
 		       created_at, last_seen
 		FROM players WHERE session_id = ?
 	`, DefaultSessionID)
@@ -377,17 +441,23 @@ func (s *Store) ListPlayersOrdered() ([]Player, error) {
 	for rows.Next() {
 		var p Player
 		var tokenHidden, manualOrder, isConnected int
+		var condStr, statsStr string
 		if err := rows.Scan(
 			&p.ID, &p.SessionID, &p.Name, &p.Initiative, &p.RaceIcon, &p.ColorHex,
 			&p.CharacterSheetPath, &p.TokenX, &p.TokenY, &tokenHidden,
 			&p.TurnOrder, &manualOrder, &isConnected, &p.ClientIP, &p.UserAgent,
-			&p.LatencyMS, &p.Role, &p.MembershipStatus, &p.CreatedAt, &p.LastSeen,
+			&p.LatencyMS, &p.Role, &p.MembershipStatus, &condStr, &p.AuraRadius, &p.AuraColor, &statsStr, &p.CreatedAt, &p.LastSeen,
 		); err != nil {
 			return nil, err
 		}
 		p.TokenHidden = tokenHidden != 0
 		p.ManualOrder = manualOrder != 0
 		p.IsConnected = isConnected != 0
+		_ = json.Unmarshal([]byte(condStr), &p.Conditions)
+		if p.Conditions == nil {
+			p.Conditions = []string{}
+		}
+		p.StatsJSON = json.RawMessage(statsStr)
 		byID[p.ID] = p
 		turnInputs = append(turnInputs, engine.TurnPlayer{
 			ID:          p.ID,
@@ -736,7 +806,9 @@ func (s *Store) ListActionLogForViewer(campaignID, viewerID string, isDM bool, l
 // ListMapEntities returns all DM-placed tactical map entities (enemies, traps, items, NPCs, hazards, doors).
 func (s *Store) ListMapEntities() ([]MapEntity, error) {
 	rows, err := s.db.Query(`
-		SELECT id, session_id, kind, name, x, y, size, color_hex, hp_current, hp_max, note, is_hidden, created_at
+		SELECT id, session_id, kind, name, x, y, size, color_hex, hp_current, hp_max, note, is_hidden,
+		       COALESCE(NULLIF(conditions_json, ''), '[]'), COALESCE(aura_radius, 0), COALESCE(aura_color, ''),
+		       COALESCE(in_initiative, 0), COALESCE(initiative, 10), created_at
 		FROM map_entities
 		WHERE session_id = ?
 		ORDER BY created_at ASC, name ASC
@@ -749,15 +821,22 @@ func (s *Store) ListMapEntities() ([]MapEntity, error) {
 	var entities []MapEntity
 	for rows.Next() {
 		var e MapEntity
-		var hidden int
+		var hidden, inInit int
+		var condStr string
 		if err := rows.Scan(
 			&e.ID, &e.SessionID, &e.Kind, &e.Name,
 			&e.X, &e.Y, &e.Size, &e.ColorHex,
-			&e.HPCurrent, &e.HPMax, &e.Note, &hidden, &e.CreatedAt,
+			&e.HPCurrent, &e.HPMax, &e.Note, &hidden,
+			&condStr, &e.AuraRadius, &e.AuraColor, &inInit, &e.Initiative, &e.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
 		e.IsHidden = hidden != 0
+		e.InInitiative = inInit != 0
+		_ = json.Unmarshal([]byte(condStr), &e.Conditions)
+		if e.Conditions == nil {
+			e.Conditions = []string{}
+		}
 		entities = append(entities, e)
 	}
 	if entities == nil {
@@ -824,19 +903,20 @@ func (s *Store) AddMapEntity(kind, name string, x, y, size int, colorHex string,
 	}
 
 	return MapEntity{
-		ID:        id,
-		SessionID: DefaultSessionID,
-		Kind:      kind,
-		Name:      name,
-		X:         x,
-		Y:         y,
-		Size:      size,
-		ColorHex:  colorHex,
-		HPCurrent: hpCurrent,
-		HPMax:     hpMax,
-		Note:      strings.TrimSpace(note),
-		IsHidden:  isHidden,
-		CreatedAt: now,
+		ID:         id,
+		SessionID:  DefaultSessionID,
+		Kind:       kind,
+		Name:       name,
+		X:          x,
+		Y:          y,
+		Size:       size,
+		ColorHex:   colorHex,
+		HPCurrent:  hpCurrent,
+		HPMax:      hpMax,
+		Note:       strings.TrimSpace(note),
+		IsHidden:   isHidden,
+		Conditions: []string{},
+		CreatedAt:  now,
 	}, nil
 }
 

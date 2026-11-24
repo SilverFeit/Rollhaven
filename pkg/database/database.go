@@ -15,7 +15,7 @@ import (
 var schemaSQL string
 
 // CurrentSchemaVersion tracks the SQLite migration version for Rollhaven.
-const CurrentSchemaVersion = 4
+const CurrentSchemaVersion = 5
 
 // Open initializes a pure-Go SQLite database at dbPath, ensures its parent directory exists,
 // configures WAL mode and foreign keys, and applies idempotent schema migrations.
@@ -79,6 +79,19 @@ func applyColumnMigrations(db *sql.DB) error {
 		`ALTER TABLE action_log ADD COLUMN roller_id TEXT DEFAULT ''`,
 		`ALTER TABLE action_log ADD COLUMN visibility TEXT DEFAULT 'PUBLIC'`,
 		`ALTER TABLE action_log ADD COLUMN command_id TEXT DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN fog_enabled INTEGER DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN fog_revealed_json TEXT DEFAULT '[]'`,
+		`ALTER TABLE sessions ADD COLUMN round_number INTEGER DEFAULT 1`,
+		`ALTER TABLE sessions ADD COLUMN scene_cards_json TEXT DEFAULT '[]'`,
+		`ALTER TABLE players ADD COLUMN conditions_json TEXT DEFAULT '[]'`,
+		`ALTER TABLE players ADD COLUMN aura_radius INTEGER DEFAULT 0`,
+		`ALTER TABLE players ADD COLUMN aura_color TEXT DEFAULT '#a855f7'`,
+		`ALTER TABLE players ADD COLUMN stats_json TEXT DEFAULT '{}'`,
+		`ALTER TABLE map_entities ADD COLUMN conditions_json TEXT DEFAULT '[]'`,
+		`ALTER TABLE map_entities ADD COLUMN aura_radius INTEGER DEFAULT 0`,
+		`ALTER TABLE map_entities ADD COLUMN aura_color TEXT DEFAULT ''`,
+		`ALTER TABLE map_entities ADD COLUMN in_initiative INTEGER DEFAULT 0`,
+		`ALTER TABLE map_entities ADD COLUMN initiative INTEGER DEFAULT 10`,
 	}
 	for _, stmt := range alterStatements {
 		if _, err := db.Exec(stmt); err != nil {

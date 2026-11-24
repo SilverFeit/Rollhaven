@@ -2,6 +2,22 @@
 
 All notable changes to **Rollhaven** (formerly Dicebound) are documented in this file.
 
+## [1.5.0] — 2026-11-24
+
+### Added — Dual HTTPS Certificate Solutions & VTT Enrichment Suite
+- **HTTPS Certificate Solution 1 (100% LAN / Offline Trust & DNS SANs):**
+  - Added `IsHostCATrusted`, `TrustCAOnHost` (one-click macOS System Keychain / Windows Root store CA installer), SHA-256 CA fingerprint verification, `.sslip.io` / `.nip.io` SAN aliases inside generated leaf certificates (`pkg/server/tls.go`), and `GET /api/v1/tls/status` + `POST /api/v1/tls/trust-host` endpoints.
+- **HTTPS Certificate Solution 2 (Public TLS Tunnel — Zero Mobile Setup):**
+  - Added on-demand `TunnelManager` (`pkg/server/tunnel.go`) supporting `cloudflared` quick tunnels and SSH `localhost.run` fallback, controlled via `/api/v1/tls/tunnel/start` & `/stop` and the interactive `CertificateModal` wizard (with instant QR URL override on the DM Dashboard).
+- **Extended `dicelib` & Fate/Fudge Engine (`pkg/engine/dice.go`):**
+  - Added MapTool-style modifiers: exploding dice (`4d6!`), drop lowest/highest (`4d6dl1`, `4d6dh1`), reroll (`1d20ro1`, `2d6r1`), count successes (`5d10cs>=6`, `5d10cs>7`), and Fate/Fudge dice (`4dF`), plus quick-preset buttons in `DecisionSets`.
+- **Advanced Tactical Map & Ephemeral Tools (`TacticalMapCanvas` & Schema v5):**
+  - Added Fog of War layer & DM reveal/hide brush (`UPDATE_FOG`), Saved Multi-Scene presets (`map_scenes`, `SAVE_SCENE`, `ACTIVATE_SCENE`, `DELETE_SCENE`), persistent token/entity Auras (`10ft`–`30ft`) & 15 D&D Conditions (`UPDATE_TACTICAL_PLAYER`, `UPDATE_ENTITY_TACTICAL`), auto-incrementing Round Counter (`round_number`), and zero-DB-write `TEMPORARY_MAP_EVENT` relays (5ft Ruler, Sphere/Cone/Cube/Line AoE templates, Ping ripples, Freehand drawing, and synced Web Audio Soundboard).
+- **Fari Index Cards & Progress Clocks + Dungeoneer SRD, CR Calculator & Mob Controller:**
+  - Added shared live Scene Index Cards & clickable Progress Clocks (`SET_SCENE_CARDS`), Interactive Player Quick Sheet (`FUE`/`DES`/`CON`/`INT`/`SAB`/`CAR` 1-click checks & custom macros) + Floating Dice FAB, Offline SRD Compendium & Procedural Tavern/NPC/Magic Shop Generators, and DM Encounter CR Calculator + bulk `MOB_ROLL` Horde attacker.
+
+---
+
 ## [1.4.0] — 2026-11-24
 
 ### Added — Rollhaven Companion Suite (Foundry Architecture)

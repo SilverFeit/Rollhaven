@@ -16,6 +16,8 @@ const (
 	MaxDicePerExpression = 100
 	MaxParenDepth        = 8
 	MaxDieSides          = 10000
+	MaxExplosions        = 50
+	MaxRerollAttempts    = 10
 )
 
 // StandardDice lists all polyhedral dice required by D&D.
@@ -24,7 +26,7 @@ var StandardDice = []int{2, 4, 6, 8, 10, 12, 20, 100}
 // DiceTerm provides structured per-term breakdown for Rollhaven's dice log and UI.
 type DiceTerm struct {
 	Kind     string `json:"kind"`               // "dice" | "constant"
-	Notation string `json:"notation,omitempty"` // e.g. "2d20kh1", "2d6"
+	Notation string `json:"notation,omitempty"` // e.g. "2d20kh1", "4dF", "5d10cs>=7"
 	Count    int    `json:"count,omitempty"`
 	Sides    int    `json:"sides,omitempty"`
 	Rolls    []int  `json:"rolls,omitempty"`
@@ -34,7 +36,7 @@ type DiceTerm struct {
 	Sign     int    `json:"sign"`
 }
 
-// DiceResult captures the outcome of a polyhedral or AST arithmetic dice expression.
+// DiceResult captures the outcome of a polyhedral or AST arithmetic/dicelib dice expression.
 type DiceResult struct {
 	Notation             string     `json:"notation"`
 	NormalizedExpression string     `json:"normalized_expression"`
@@ -103,12 +105,34 @@ const (
 )
 
 type diceToken struct {
-	kind      tokKind
-	numVal    int
-	count     int
-	sides     int
-	keepMode  string // "", "kh", "kl"
-	keepCount int
+	kind       tokKind
+	numVal     int
+	count      int
+	sides      int
+	isFudge    bool
+	explode    bool
+	rerollMax  int
+	rerollOnce bool
+	keepMode   string // "", "kh", "kl", "dh", "dl"
+	keepCount  int
+	successOp  string // "", ">=", ">"
+	successVal int
+}
+
+func readDigits(runes []rune, i int) (val int, nextIdx int, ok bool) {
+	n := len(runes)
+	if i >= n || !unicode.IsDigit(runes[i]) {
+		return 0, i, false
+	}
+	start := i
+	for i < n && unicode.IsDigit(runes[i]) {
+		i++
+	}
+	parsed, err := strconv.Atoi(string(runes[start:i]))
+	if err != nil {
+		return 0, i, false
+	}
+	return parsed, i, true
 }
 
 func tokenizeDiceExpr(input string) ([]diceToken, error) {
@@ -157,14 +181,11 @@ func tokenizeDiceExpr(input string) ([]diceToken, error) {
 				count := 1
 				hasCount := false
 				if unicode.IsDigit(r) {
-					start := i
-					for i < n && unicode.IsDigit(runes[i]) {
-						i++
+					val, nextI, ok := readDigits(runes, i)
+					if !ok {
+						return nil, fmt.Errorf("número inválido cerca de %q", string(runes[i]))
 					}
-					val, err := strconv.Atoi(string(runes[start:i]))
-					if err != nil {
-						return nil, fmt.Errorf("número inválido cerca de %q", string(runes[start:i]))
-					}
+					i = nextI
 					if i < n && (runes[i] == 'd' || runes[i] == 'D') {
 						count = val
 						hasCount = true
@@ -180,60 +201,119 @@ func tokenizeDiceExpr(input string) ([]diceToken, error) {
 				}
 				i++
 
-				if i >= n || !unicode.IsDigit(runes[i]) {
-					return nil, fmt.Errorf("falta número de caras después de 'd'")
-				}
-				sideStart := i
-				for i < n && unicode.IsDigit(runes[i]) {
-					i++
-				}
-				sides, err := strconv.Atoi(string(runes[sideStart:i]))
-				if err != nil || sides < 2 || sides > MaxDieSides {
-					return nil, fmt.Errorf("número de caras inválido (%d..%d)", 2, MaxDieSides)
-				}
 				if hasCount && count < 1 {
 					return nil, fmt.Errorf("la cantidad de dados debe ser al menos 1")
 				}
+
+				sides := 0
+				isFudge := false
+				if i < n && (runes[i] == 'f' || runes[i] == 'F') {
+					isFudge = true
+					sides = 3
+					i++
+				} else {
+					parsedSides, nextI, ok := readDigits(runes, i)
+					if !ok || parsedSides < 2 || parsedSides > MaxDieSides {
+						return nil, fmt.Errorf("número de caras inválido (%d..%d)", 2, MaxDieSides)
+					}
+					sides = parsedSides
+					i = nextI
+				}
+
 				totalDice += count
 				if totalDice > MaxDicePerExpression {
 					return nil, fmt.Errorf("exceso de dados en la expresión (máximo %d)", MaxDicePerExpression)
 				}
 
-				keepMode := ""
-				keepCount := 0
-				if i+1 < n && (runes[i] == 'k' || runes[i] == 'K') {
-					next := unicode.ToLower(runes[i+1])
-					if next == 'h' || next == 'l' {
-						keepMode = "k" + string(next)
-						i += 2
-						if i < n && unicode.IsDigit(runes[i]) {
-							kStart := i
-							for i < n && unicode.IsDigit(runes[i]) {
-								i++
-							}
-							kc, kErr := strconv.Atoi(string(runes[kStart:i]))
-							if kErr != nil || kc < 1 {
-								return nil, fmt.Errorf("modificador %s inválido", keepMode)
-							}
-							keepCount = kc
-						} else {
-							keepCount = 1
-						}
-						if keepCount > count {
-							return nil, fmt.Errorf("no se pueden conservar %d dados de %d lanzados", keepCount, count)
-						}
-					} else {
-						return nil, fmt.Errorf("modificador de dado no soportado cerca de %q", string(runes[i:]))
-					}
+				tok := diceToken{
+					kind:    tokDice,
+					count:   count,
+					sides:   sides,
+					isFudge: isFudge,
 				}
 
-				tokens = append(tokens, diceToken{
-					kind:      tokDice,
-					count:     count,
-					sides:     sides,
-					keepMode:  keepMode,
-					keepCount: keepCount,
-				})
+				// Parse chained dicelib modifiers: !, r[N], ro[N], kh[N], kl[N], dh[N], dl[N], cs>=N / cs>N
+				for i < n {
+					ch := unicode.ToLower(runes[i])
+					if ch == '!' {
+						if isFudge {
+							return nil, fmt.Errorf("dados Fate/Fudge no soportan explosión (!)")
+						}
+						tok.explode = true
+						i++
+						continue
+					}
+					if ch == 'r' {
+						if isFudge {
+							return nil, fmt.Errorf("dados Fate/Fudge no soportan reroll")
+						}
+						i++
+						once := false
+						if i < n && unicode.ToLower(runes[i]) == 'o' {
+							once = true
+							i++
+						}
+						thresh, nextI, ok := readDigits(runes, i)
+						if !ok {
+							thresh = 1
+						} else {
+							i = nextI
+						}
+						if thresh < 1 || thresh >= sides {
+							return nil, fmt.Errorf("umbral de reroll %d inválido para d%d", thresh, sides)
+						}
+						tok.rerollMax = thresh
+						tok.rerollOnce = once
+						continue
+					}
+					if (ch == 'k' || ch == 'd') && i+1 < n {
+						next := unicode.ToLower(runes[i+1])
+						if next == 'h' || next == 'l' {
+							mode := string(ch) + string(next)
+							i += 2
+							kc, nextI, ok := readDigits(runes, i)
+							if !ok {
+								kc = 1
+							} else {
+								i = nextI
+							}
+							if kc < 1 {
+								return nil, fmt.Errorf("modificador %s inválido", mode)
+							}
+							if ch == 'k' && kc > count {
+								return nil, fmt.Errorf("no se pueden conservar %d dados de %d lanzados", kc, count)
+							}
+							if ch == 'd' && kc >= count {
+								return nil, fmt.Errorf("no se pueden descartar %d dados de %d lanzados", kc, count)
+							}
+							tok.keepMode = mode
+							tok.keepCount = kc
+							continue
+						}
+					}
+					if ch == 'c' && i+1 < n && unicode.ToLower(runes[i+1]) == 's' {
+						i += 2
+						op := ">="
+						if i+1 < n && runes[i] == '>' && runes[i+1] == '=' {
+							op = ">="
+							i += 2
+						} else if i < n && runes[i] == '>' {
+							op = ">"
+							i++
+						}
+						target, nextI, ok := readDigits(runes, i)
+						if !ok {
+							return nil, fmt.Errorf("falta umbral numérico después de cs")
+						}
+						i = nextI
+						tok.successOp = op
+						tok.successVal = target
+						continue
+					}
+					break
+				}
+
+				tokens = append(tokens, tok)
 				continue
 			}
 
@@ -258,18 +338,42 @@ func (n numNode) format() string {
 }
 
 type dieRollNode struct {
-	count     int
-	sides     int
-	keepMode  string
-	keepCount int
+	count      int
+	sides      int
+	isFudge    bool
+	explode    bool
+	rerollMax  int
+	rerollOnce bool
+	keepMode   string
+	keepCount  int
+	successOp  string
+	successVal int
 }
 
 func (d dieRollNode) format() string {
-	base := fmt.Sprintf("%dd%d", d.count, d.sides)
-	if d.keepMode != "" {
-		return fmt.Sprintf("%s%s%d", base, d.keepMode, d.keepCount)
+	var b strings.Builder
+	if d.isFudge {
+		fmt.Fprintf(&b, "%ddF", d.count)
+	} else {
+		fmt.Fprintf(&b, "%dd%d", d.count, d.sides)
 	}
-	return base
+	if d.explode {
+		b.WriteByte('!')
+	}
+	if d.rerollMax > 0 {
+		if d.rerollOnce {
+			fmt.Fprintf(&b, "ro%d", d.rerollMax)
+		} else {
+			fmt.Fprintf(&b, "r%d", d.rerollMax)
+		}
+	}
+	if d.keepMode != "" {
+		fmt.Fprintf(&b, "%s%d", d.keepMode, d.keepCount)
+	}
+	if d.successOp != "" {
+		fmt.Fprintf(&b, "cs%s%d", d.successOp, d.successVal)
+	}
+	return b.String()
 }
 
 type unaryNode struct {
@@ -399,10 +503,16 @@ func (p *astParser) parsePrimary() (diceExprNode, error) {
 	case tokDice:
 		p.next()
 		return dieRollNode{
-			count:     tok.count,
-			sides:     tok.sides,
-			keepMode:  tok.keepMode,
-			keepCount: tok.keepCount,
+			count:      tok.count,
+			sides:      tok.sides,
+			isFudge:    tok.isFudge,
+			explode:    tok.explode,
+			rerollMax:  tok.rerollMax,
+			rerollOnce: tok.rerollOnce,
+			keepMode:   tok.keepMode,
+			keepCount:  tok.keepCount,
+			successOp:  tok.successOp,
+			successVal: tok.successVal,
 		}, nil
 	case tokLParen:
 		p.next()
@@ -434,6 +544,36 @@ type evalContext struct {
 	hasFumble  bool
 }
 
+func rollOneDie(n dieRollNode) (int, error) {
+	if n.isFudge {
+		v, err := CryptoRandInt(1, 3)
+		if err != nil {
+			return 0, err
+		}
+		return v - 2, nil
+	}
+	v, err := CryptoRandInt(1, n.sides)
+	if err != nil {
+		return 0, err
+	}
+	if n.rerollMax > 0 && v <= n.rerollMax {
+		if n.rerollOnce {
+			v, err = CryptoRandInt(1, n.sides)
+			if err != nil {
+				return 0, err
+			}
+		} else {
+			for attempt := 0; attempt < MaxRerollAttempts && v <= n.rerollMax; attempt++ {
+				v, err = CryptoRandInt(1, n.sides)
+				if err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+	return v, nil
+}
+
 func evalAST(node diceExprNode, sign int, ec *evalContext) (int, error) {
 	switch n := node.(type) {
 	case numNode:
@@ -446,45 +586,87 @@ func evalAST(node diceExprNode, sign int, ec *evalContext) (int, error) {
 
 	case dieRollNode:
 		rolls := make([]int, 0, n.count)
+		explosions := 0
 		for i := 0; i < n.count; i++ {
-			v, err := CryptoRandInt(1, n.sides)
+			v, err := rollOneDie(n)
 			if err != nil {
 				return 0, err
 			}
 			rolls = append(rolls, v)
+			// Exploding dice (!) roll again on max face value
+			for n.explode && !n.isFudge && v == n.sides && explosions < MaxExplosions {
+				explosions++
+				ev, err := rollOneDie(n)
+				if err != nil {
+					return 0, err
+				}
+				rolls = append(rolls, ev)
+				v = ev
+			}
 		}
+
 		kept := make([]int, len(rolls))
 		copy(kept, rolls)
-		if n.keepMode == "kh" || n.keepMode == "kl" {
+		if n.keepMode != "" && len(rolls) > 1 {
 			sorted := make([]int, len(rolls))
 			copy(sorted, rolls)
-			if n.keepMode == "kh" {
+			switch n.keepMode {
+			case "kh":
 				sort.Slice(sorted, func(i, j int) bool { return sorted[i] > sorted[j] })
-			} else {
+				if n.keepCount < len(sorted) {
+					kept = sorted[:n.keepCount]
+				}
+			case "kl":
 				sort.Ints(sorted)
+				if n.keepCount < len(sorted) {
+					kept = sorted[:n.keepCount]
+				}
+			case "dl":
+				sort.Slice(sorted, func(i, j int) bool { return sorted[i] > sorted[j] })
+				keepN := len(sorted) - n.keepCount
+				if keepN < 1 {
+					keepN = 1
+				}
+				kept = sorted[:keepN]
+			case "dh":
+				sort.Ints(sorted)
+				keepN := len(sorted) - n.keepCount
+				if keepN < 1 {
+					keepN = 1
+				}
+				kept = sorted[:keepN]
 			}
-			kept = sorted[:n.keepCount]
 		}
+
 		sub := 0
-		for _, v := range kept {
-			sub += v
-			if n.sides == 20 {
-				if v == 20 {
-					ec.hasCrit = true
-				} else if v == 1 {
-					ec.hasFumble = true
+		if n.successOp != "" {
+			for _, v := range kept {
+				if (n.successOp == ">=" && v >= n.successVal) || (n.successOp == ">" && v > n.successVal) {
+					sub++
+				}
+			}
+		} else {
+			for _, v := range kept {
+				sub += v
+				if !n.isFudge && n.sides == 20 {
+					if v == 20 {
+						ec.hasCrit = true
+					} else if v == 1 {
+						ec.hasFumble = true
+					}
 				}
 			}
 		}
+
 		if ec.firstSides == 0 {
 			ec.firstSides = n.sides
 		}
-		ec.diceCount += n.count
+		ec.diceCount += len(rolls)
 		ec.totalRolls = append(ec.totalRolls, rolls...)
 		ec.terms = append(ec.terms, DiceTerm{
 			Kind:     "dice",
 			Notation: n.format(),
-			Count:    n.count,
+			Count:    len(rolls),
 			Sides:    n.sides,
 			Rolls:    rolls,
 			Kept:     kept,
@@ -536,8 +718,8 @@ func evalAST(node diceExprNode, sign int, ec *evalContext) (int, error) {
 	return 0, fmt.Errorf("nodo AST desconocido")
 }
 
-// RollDice safely parses and evaluates both simple ("1d20+3") and compound arithmetic/keep
-// expressions ("2d6 + 1d4 + 3", "(1d20+4)/2", "2d20kh1") using crypto/rand and an AST evaluator.
+// RollDice safely parses and evaluates simple, compound arithmetic, and MapTool dicelib expressions
+// ("2d6 + 1d4 + 3", "(1d20+4)/2", "2d20kh1", "4d6dl1", "4d6!", "1d20ro1", "5d10cs>=7", "4dF") using crypto/rand.
 func RollDice(notation string) (DiceResult, error) {
 	tokens, err := tokenizeDiceExpr(notation)
 	if err != nil {
@@ -558,8 +740,6 @@ func RollDice(notation string) (DiceResult, error) {
 		return DiceResult{}, err
 	}
 
-	// Calculate linear dice subtotal + constant modifier when possible,
-	// falling back smoothly for multiplicative/parenthetical expressions.
 	diceSub := 0
 	for _, term := range ec.terms {
 		if term.Kind == "dice" {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -76,7 +77,7 @@ func TestHealthAndDMAuth(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		t.Fatal(err)
 	}
-	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Rollhaven" || health["version"] != "1.4.0" || health["license"] != "MIT" {
+	if health["lan_ip"] != "192.168.1.42" || health["app"] != "Rollhaven" || health["version"] != "1.5.0" || health["license"] != "MIT" {
 		t.Fatalf("unexpected health response: %+v", health)
 	}
 
@@ -942,5 +943,209 @@ func TestFoundryCompanionCampaignsPrivacyNotesChatAndBackup(t *testing.T) {
 	cleanStateResp.Body.Close()
 	if restoredSnap.ActiveCampaign.Name != "Tumba de Aniquilación" || len(restoredSnap.Players) != 2 {
 		t.Fatalf("expected restored campaign & 2 players, got %s players=%d", restoredSnap.ActiveCampaign.Name, len(restoredSnap.Players))
+	}
+}
+
+func TestV150CertificatesScenesFogMobRollAndTemporaryEvents(t *testing.T) {
+	srv, ts := setupTestServer(t)
+
+	// 1. Solution 1 & 2 TLS/Tunnel status endpoint + .sslip.io SAN on generated leaf certificate
+	tlsResp, err := http.Get(ts.URL + "/api/v1/tls/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tlsStatus struct {
+		CACertHTTPURL       string              `json:"ca_cert_http_url"`
+		CAFingerprintSHA256 string              `json:"ca_fingerprint_sha256"`
+		SSLIPHTTPSURL       string              `json:"sslip_https_url"`
+		Tunnel              server.TunnelStatus `json:"tunnel"`
+	}
+	if err := json.NewDecoder(tlsResp.Body).Decode(&tlsStatus); err != nil {
+		t.Fatal(err)
+	}
+	tlsResp.Body.Close()
+
+	if tlsStatus.CACertHTTPURL != "http://192.168.1.42:8080/api/v1/tls/ca.crt" {
+		t.Fatalf("unexpected ca_cert_http_url: %s", tlsStatus.CACertHTTPURL)
+	}
+	if !strings.Contains(tlsStatus.SSLIPHTTPSURL, "192-168-1-42.sslip.io") {
+		t.Fatalf("expected .sslip.io HTTPS URL, got %s", tlsStatus.SSLIPHTTPSURL)
+	}
+	if tlsStatus.CAFingerprintSHA256 == "" || tlsStatus.Tunnel.Active {
+		t.Fatalf("unexpected TLS fingerprint/tunnel status: %+v", tlsStatus)
+	}
+	if srv.TLSConfig == nil || len(srv.TLSConfig.Certificates) == 0 || len(srv.TLSConfig.Certificates[0].Certificate) == 0 {
+		t.Fatalf("expected generated leaf TLS certificate on server")
+	}
+	leafCert, err := x509.ParseCertificate(srv.TLSConfig.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatalf("parse leaf cert: %v", err)
+	}
+	foundSSLIP := false
+	for _, dnsName := range leafCert.DNSNames {
+		if dnsName == "192-168-1-42.sslip.io" {
+			foundSSLIP = true
+			break
+		}
+	}
+	if !foundSSLIP {
+		t.Fatalf("expected 192-168-1-42.sslip.io in cert SANs %v", leafCert.DNSNames)
+	}
+
+	// 2. Connect DM and 2 players
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	dmConn, _, err := websocket.Dial(ctx, wsURL+"?role=dm&pin=8492", nil)
+	if err != nil {
+		t.Fatalf("dial DM: %v", err)
+	}
+	defer dmConn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+
+	p1Conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial p1: %v", err)
+	}
+	defer p1Conn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, p1Conn, "STATE_SYNC")
+	p1Join, _ := json.Marshal(map[string]any{"name": "Aria", "initiative": 18, "race": "elf", "color": "#a855f7"})
+	_ = wsjson.Write(ctx, p1Conn, server.WSMessage{Event: "JOIN_ROOM", Payload: p1Join})
+	p1Ack := readUntilEvent(t, ctx, p1Conn, "JOIN_ACK")
+
+	p2Conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial p2: %v", err)
+	}
+	defer p2Conn.Close(websocket.StatusNormalClosure, "done")
+	_ = readUntilEvent(t, ctx, p2Conn, "STATE_SYNC")
+	p2Join, _ := json.Marshal(map[string]any{"name": "Borin", "initiative": 10, "race": "dwarf", "color": "#f59e0b"})
+	_ = wsjson.Write(ctx, p2Conn, server.WSMessage{Event: "JOIN_ROOM", Payload: p2Join})
+	_ = readUntilEvent(t, ctx, p2Conn, "JOIN_ACK")
+
+	// 3. Fari Scene Cards & Progress Clocks + Fog of War + Multi-Scene Save/Activate
+	cardsPayload, _ := json.Marshal(map[string]any{
+		"action": "SET_SCENE_CARDS",
+		"scene_cards": []store.SceneCard{
+			{ID: "c1", Title: "Ritual del Altar", Subtitle: "Se completa en 4 segmentos", Kind: "clock", Segments: 4, Filled: 2},
+			{ID: "c2", Title: "Suelo Resbaladizo", Subtitle: "DES DC 12 al correr", Kind: "aspect"},
+		},
+	})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: cardsPayload})
+
+	fogEnabled := true
+	fogPayload, _ := json.Marshal(map[string]any{
+		"action":       "UPDATE_FOG",
+		"fog_enabled":  fogEnabled,
+		"fog_revealed": []string{"1,1", "2,1"},
+	})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: fogPayload})
+
+	var snap server.StateSnapshot
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if len(snap.Session.SceneCards) == 2 && snap.Session.FogEnabled && len(snap.Session.FogRevealed) == 2 {
+			break
+		}
+	}
+	origCols, origRows := snap.Session.MapCols, snap.Session.MapRows
+
+	saveScenePayload, _ := json.Marshal(map[string]any{"action": "SAVE_SCENE", "scene_name": "Cripta Norte"})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: saveScenePayload})
+	var savedSceneID string
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if len(snap.MapScenes) > 0 {
+			savedSceneID = snap.MapScenes[0].ID
+			break
+		}
+	}
+
+	resizePayload, _ := json.Marshal(map[string]any{"action": "UPDATE_MAP_CONFIG", "map_cols": 25, "map_rows": 30})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: resizePayload})
+	fogOffPayload, _ := json.Marshal(map[string]any{"action": "UPDATE_FOG", "fog_enabled": false})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: fogOffPayload})
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if snap.Session.MapCols == 25 && snap.Session.MapRows == 30 && !snap.Session.FogEnabled {
+			break
+		}
+	}
+
+	activatePayload, _ := json.Marshal(map[string]any{"action": "ACTIVATE_SCENE", "scene_id": savedSceneID})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: activatePayload})
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if snap.Session.MapCols == origCols && snap.Session.MapRows == origRows && snap.Session.FogEnabled {
+			break
+		}
+	}
+
+	// 4. Round counter auto-increments on full turn wrap (0 -> 1 -> 0 => Round 2)
+	nextTurnPayload, _ := json.Marshal(map[string]any{"action": "NEXT_TURN"})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: nextTurnPayload})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: nextTurnPayload})
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		if snap.Session.RoundNumber >= 2 {
+			break
+		}
+	}
+
+	// 5. Mob Controller bulk attack broadcast
+	mobPayload, _ := json.Marshal(map[string]any{
+		"action":           "MOB_ROLL",
+		"mob_name":         "Kobold",
+		"mob_count":        5,
+		"mob_atk_bonus":    4,
+		"mob_target_ac":    14,
+		"mob_dmg_notation": "1d6+2",
+		"mob_visibility":   "PUBLIC",
+	})
+	_ = wsjson.Write(ctx, dmConn, server.WSMessage{Event: "DM_OVERRIDE", Payload: mobPayload})
+	mobRB := readUntilEvent(t, ctx, p1Conn, "RESULT_BROADCAST")
+	var mobBroadcast server.RollBroadcast
+	_ = json.Unmarshal(mobRB.Payload, &mobBroadcast)
+	if mobBroadcast.SetType != "DICE" || !strings.Contains(mobBroadcast.ResultSummary, "Horda Kobold") {
+		t.Fatalf("unexpected MOB_ROLL broadcast: %+v", mobBroadcast)
+	}
+
+	// 6. Player Tactical State update (conditions + aura + quick sheet stats)
+	tactPayload, _ := json.Marshal(map[string]any{
+		"target_player_id": p1Ack.PlayerID,
+		"conditions":       []string{"concentration", "blessed"},
+		"aura_radius":      10,
+		"aura_color":       "#fbbf24",
+		"stats_json":       map[string]any{"hp_current": 24, "hp_max": 28, "ac": 16},
+	})
+	_ = wsjson.Write(ctx, p1Conn, server.WSMessage{Event: "UPDATE_TACTICAL_PLAYER", Payload: tactPayload})
+	for {
+		msg := readUntilEvent(t, ctx, dmConn, "STATE_SYNC")
+		_ = json.Unmarshal(msg.Payload, &snap)
+		foundUpdated := false
+		for _, pl := range snap.Players {
+			if pl.ID == p1Ack.PlayerID && pl.AuraRadius == 10 && len(pl.Conditions) == 2 {
+				foundUpdated = true
+			}
+		}
+		if foundUpdated {
+			break
+		}
+	}
+
+	// 7. Zero-DB ephemeral TEMPORARY_MAP_EVENT broadcast relay (Ping / Ruler / Sound)
+	pingPayload, _ := json.Marshal(map[string]any{"kind": "ping", "x": 3, "y": 4, "sender_name": "Aria"})
+	_ = wsjson.Write(ctx, p1Conn, server.WSMessage{Event: "TEMPORARY_MAP_EVENT", Payload: pingPayload})
+	tempMsg := readUntilEvent(t, ctx, dmConn, "TEMPORARY_MAP_EVENT")
+	var tempBody map[string]any
+	_ = json.Unmarshal(tempMsg.Payload, &tempBody)
+	if tempBody["kind"] != "ping" {
+		t.Fatalf("expected TEMPORARY_MAP_EVENT kind=ping, got %+v", tempBody)
 	}
 }

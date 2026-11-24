@@ -83,9 +83,9 @@ func (s *Store) ExportCampaignBundle() (CampaignBundle, error) {
 	audits, _ := s.ListAuditEvents(camp.ID, 200)
 
 	bundle := CampaignBundle{
-		SchemaVersion:    4,
+		SchemaVersion:    5,
 		App:              "Rollhaven",
-		Version:          "1.4.0",
+		Version:          "1.5.0",
 		ExportedAt:       time.Now().UTC(),
 		Campaign:         camp,
 		CampaignSessions: campSessions,
@@ -333,9 +333,9 @@ func (s *Store) CreateFullBackupZip(dataDir string) ([]byte, error) {
 	bSum := sha256.Sum256(bundleBytes)
 
 	manifest := BackupManifest{
-		SchemaVersion: 4,
+		SchemaVersion: 5,
 		App:           "Rollhaven",
-		Version:       "1.4.0",
+		Version:       "1.5.0",
 		CreatedAt:     time.Now().UTC(),
 		BundleSHA256:  hex.EncodeToString(bSum[:]),
 		AssetHashes:   make(map[string]string),

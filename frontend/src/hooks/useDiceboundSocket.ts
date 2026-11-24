@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RollBroadcast, StateSnapshot, WSMessage } from '../types'
+import { RollBroadcast, StateSnapshot, TemporaryMapEvent, WSMessage } from '../types'
+import { playTabletopSound } from '../lib/srdCompendiumAndGenerators'
 
 const STORAGE_PLAYER_ID_KEY = 'rollhaven_player_id'
 
@@ -17,6 +18,7 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [noteConflict, setNoteConflict] = useState<string | null>(null)
   const [lastBroadcast, setLastBroadcast] = useState<RollBroadcast | null>(null)
+  const [tempEvents, setTempEvents] = useState<TemporaryMapEvent[]>([])
   const [kicked, setKicked] = useState(false)
   const [revoked, setRevoked] = useState(false)
 
@@ -89,6 +91,33 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
           }
           case 'RESULT_BROADCAST': {
             setLastBroadcast(msg.payload as RollBroadcast)
+            break
+          }
+          case 'TEMPORARY_MAP_EVENT': {
+            const ev = msg.payload as TemporaryMapEvent
+            if (ev?.kind === 'sound' && ev.sound_id) {
+              playTabletopSound(ev.sound_id)
+              break
+            }
+            if (ev) {
+              const stamped: TemporaryMapEvent = { ...ev, receivedAt: Date.now() }
+              setTempEvents((prev) => {
+                if (ev.clear && ev.kind === 'draw') {
+                  return prev.filter((x) => x.kind !== 'draw')
+                }
+                if (ev.clear && ev.kind === 'aoe') {
+                  return prev.filter((x) => x.kind !== 'aoe')
+                }
+                const cleaned = prev.filter((x) => x.kind === 'draw' || Date.now() - (x.receivedAt || 0) < 12000)
+                if (ev.kind === 'aoe') {
+                  return [...cleaned.filter((x) => x.kind !== 'aoe'), stamped]
+                }
+                if (ev.kind === 'ruler') {
+                  return [...cleaned.filter((x) => x.kind !== 'ruler'), stamped]
+                }
+                return [...cleaned.slice(-24), stamped]
+              })
+            }
             break
           }
           case 'NOTE_CONFLICT': {
@@ -169,6 +198,7 @@ export function useDiceboundSocket(options: UseDiceboundOptions = {}) {
     connected,
     playerID,
     lastBroadcast,
+    tempEvents,
     errorMsg,
     noteConflict,
     kicked,

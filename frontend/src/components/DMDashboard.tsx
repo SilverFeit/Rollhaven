@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  CloudFog,
   Copy,
   Crown,
   DoorOpen,
@@ -21,23 +22,31 @@ import {
   Hand,
   HardDrive,
   KeyRound,
+  Lock,
   Map as MapIcon,
   MapPin,
   NotebookPen,
   PauseCircle,
   PlayCircle,
+  Radio,
   RefreshCw,
+  Save,
   ScrollText,
   Shield,
   ShieldCheck,
   Skull,
+  Sparkles,
   StopCircle,
+  Swords,
   Trash2,
   Upload,
   Users,
+  Volume2,
 } from 'lucide-react'
 import { useDiceboundSocket } from '../hooks/useDiceboundSocket'
-import { MapEntityKind } from '../types'
+import { MapEntityKind, SceneCard } from '../types'
+import { DND_CONDITIONS, SOUNDBOARD_CLIPS, calculateEncounterDifficulty, crToXP, playTabletopSound } from '../lib/srdCompendiumAndGenerators'
+import { CertificateModal } from './CertificateModal'
 import { CompanionHub } from './CompanionHub'
 import { DecisionSets } from './DecisionSets'
 import { RaceSVG } from './RaceIcons'
@@ -174,6 +183,22 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   const [newSessionTitle, setNewSessionTitle] = useState('')
   const [backupStatus, setBackupStatus] = useState<string | null>(null)
 
+  // v1.5.0: Certificates / Tunnel, Scene Presets, Fari Cards & Clocks, CR/Mob & Entity Tactics
+  const [certModalOpen, setCertModalOpen] = useState(false)
+  const [customQrURL, setCustomQrURL] = useState<string | null>(null)
+  const [newSceneName, setNewSceneName] = useState('')
+  const [newCardTitle, setNewCardTitle] = useState('')
+  const [newCardSubtitle, setNewCardSubtitle] = useState('')
+  const [newCardKind, setNewCardKind] = useState<'aspect' | 'clock'>('clock')
+  const [newCardSegments, setNewCardSegments] = useState(4)
+  const [partyAvgLevel, setPartyAvgLevel] = useState(3)
+  const [mobName, setMobName] = useState('Goblin')
+  const [mobCount, setMobCount] = useState(4)
+  const [mobAtkBonus, setMobAtkBonus] = useState(4)
+  const [mobTargetAC, setMobTargetAC] = useState(15)
+  const [mobDmgNotation, setMobDmgNotation] = useState('1d6+2')
+  const [entityTacticalOpenID, setEntityTacticalOpenID] = useState<string | null>(null)
+
   useEffect(() => {
     fetch('/api/v1/dm/status')
       .then((r) => r.json())
@@ -223,6 +248,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
     snapshot,
     connected,
     lastBroadcast,
+    tempEvents,
     errorMsg,
     noteConflict,
     sendMessage,
@@ -318,6 +344,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
 
   const lanScheme = qrHTTPS ? 'https' : 'http'
   const lanURL = snapshot ? `${lanScheme}://${snapshot.lan_ip}:${snapshot.port}` : window.location.origin
+  const activeQRURL = customQrURL || lanURL
   const players = snapshot?.players ?? []
   const connectedCount = players.filter((p) => p.is_connected).length
 
@@ -351,7 +378,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   }
 
   const copyLanURL = () => {
-    navigator.clipboard?.writeText(lanURL)
+    navigator.clipboard?.writeText(activeQRURL)
     setCopiedURL(true)
     window.setTimeout(() => setCopiedURL(false), 1800)
   }
@@ -663,12 +690,26 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
             </div>
 
             <div className="flex flex-col items-center bg-white p-3.5 rounded-2xl w-fit mx-auto shadow-lg">
-              <QRCodeSVG value={lanURL} size={148} level="M" />
+              <QRCodeSVG value={activeQRURL} size={148} level="M" />
             </div>
 
             <div className="space-y-2">
+              {customQrURL && (
+                <div className="flex items-center justify-between gap-2 bg-emerald-500/15 border border-emerald-400/40 rounded-lg px-2.5 py-1 text-[11px] text-emerald-200">
+                  <span className="flex items-center gap-1 font-semibold truncate">
+                    <Radio className="w-3 h-3 shrink-0" /> URL HTTPS Activa
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCustomQrURL(null)}
+                    className="underline text-amber-200 hover:text-white shrink-0"
+                  >
+                    Volver a LAN
+                  </button>
+                </div>
+              )}
               <div className="flex items-center gap-2 bg-[#090712] border border-violet-500/30 rounded-xl px-3 py-2">
-                <span className="text-xs font-mono text-amber-200 truncate flex-1">{lanURL}</span>
+                <span className="text-xs font-mono text-amber-200 truncate flex-1">{activeQRURL}</span>
                 <button
                   type="button"
                   onClick={copyLanURL}
@@ -684,13 +725,21 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                   {connectedCount} / {players.length} conectados
                 </span>
               </div>
+              <button
+                type="button"
+                onClick={() => setCertModalOpen(true)}
+                className="w-full py-2 px-3 rounded-xl bg-emerald-500/15 border border-emerald-400/45 hover:bg-emerald-500/25 text-[11px] font-bold text-emerald-200 flex items-center justify-center gap-1.5 transition"
+              >
+                <Lock className="w-3.5 h-3.5 text-amber-300" />
+                Certificado HTTPS &amp; Túnel Público (2 Soluciones)
+              </button>
               <a
                 href={`http://${snapshot?.lan_ip || window.location.hostname}:${snapshot?.port || window.location.port || 8080}/api/v1/tls/ca.crt`}
                 download="rollhaven-ca.crt"
-                className="w-full py-2 px-3 rounded-xl bg-[#090712] border border-violet-500/30 hover:border-emerald-400/50 text-[11px] font-semibold text-violet-200 flex items-center justify-center gap-1.5 transition"
+                className="w-full py-1.5 px-3 rounded-xl bg-[#090712] border border-violet-500/30 hover:border-emerald-400/50 text-[11px] font-semibold text-violet-200 flex items-center justify-center gap-1.5 transition"
               >
                 <Download className="w-3.5 h-3.5 text-emerald-400" />
-                Descargar Certificado CA Local (rollhaven-ca.crt)
+                Descarga Rápida CA Local (rollhaven-ca.crt)
               </a>
             </div>
           </section>
@@ -909,6 +958,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
             players={snapshot.players}
             activePlayerID={snapshot.active_player_id}
             localPlayerID=""
+            roundNumber={snapshot.session.round_number ?? 1}
             currentTurnRolls={snapshot.current_turn_rolls}
             lastBroadcast={lastBroadcast}
             onEndTurn={() => sendDMOverride({ action: 'NEXT_TURN' })}
@@ -1077,6 +1127,292 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
           </div>
         )}
 
+        {/* Row 2.5 (v1.5.0): Fari Scene Cards & Clocks + Dungeoneer CR/Mob Controller & Web Audio Soundboard */}
+        {snapshot && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Fari Scene Index Cards & Progress Clocks */}
+            <section className="lg:col-span-6 rounded-2xl border border-violet-500/25 bg-[#120d22]/85 p-4 sm:p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-amber-200 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  Tarjetas de Escena &amp; Relojes de Progreso (Fari)
+                </h2>
+                <span className="text-[11px] text-slate-400">Visible en todos los móviles</span>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (!newCardTitle.trim()) return
+                  const nextCards: SceneCard[] = [
+                    ...(snapshot.session.scene_cards ?? []),
+                    {
+                      id: `card_${Date.now()}`,
+                      title: newCardTitle.trim(),
+                      subtitle: newCardSubtitle.trim(),
+                      kind: newCardKind,
+                      segments: newCardKind === 'clock' ? Math.max(2, Math.min(12, newCardSegments)) : 0,
+                      filled: 0,
+                    },
+                  ]
+                  sendDMOverride({ action: 'SET_SCENE_CARDS', scene_cards: nextCards })
+                  setNewCardTitle('')
+                  setNewCardSubtitle('')
+                }}
+                className="flex flex-wrap items-center gap-2 bg-[#090712]/70 p-2.5 rounded-xl border border-violet-500/20 text-xs"
+              >
+                <input
+                  type="text"
+                  value={newCardTitle}
+                  onChange={(e) => setNewCardTitle(e.target.value)}
+                  placeholder="Título (ej. Ritual Oscuro / Puente en Llamas)"
+                  className="flex-1 min-w-[150px] bg-[#120d22] border border-violet-500/30 rounded-lg px-2.5 py-1.5 text-white"
+                />
+                <input
+                  type="text"
+                  value={newCardSubtitle}
+                  onChange={(e) => setNewCardSubtitle(e.target.value)}
+                  placeholder="Regla o detalle..."
+                  className="flex-1 min-w-[130px] bg-[#120d22] border border-violet-500/30 rounded-lg px-2.5 py-1.5 text-slate-200"
+                />
+                <select
+                  value={newCardKind}
+                  onChange={(e) => setNewCardKind(e.target.value as 'aspect' | 'clock')}
+                  className="bg-[#120d22] border border-violet-500/30 rounded-lg px-2 py-1.5 text-amber-200"
+                >
+                  <option value="clock">Reloj</option>
+                  <option value="aspect">Aspecto</option>
+                </select>
+                {newCardKind === 'clock' && (
+                  <select
+                    value={newCardSegments}
+                    onChange={(e) => setNewCardSegments(Number(e.target.value))}
+                    className="bg-[#120d22] border border-violet-500/30 rounded-lg px-2 py-1.5 text-slate-200"
+                  >
+                    {[4, 6, 8, 10, 12].map((seg) => (
+                      <option key={seg} value={seg}>
+                        {seg} seg
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  type="submit"
+                  className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-bold"
+                >
+                  Fijar
+                </button>
+              </form>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {(snapshot.session.scene_cards?.length ?? 0) === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    Fija aspectos ambientales o relojes de amenaza para que todo el grupo vea el progreso en vivo.
+                  </p>
+                ) : (
+                  snapshot.session.scene_cards!.map((card) => (
+                    <div
+                      key={card.id}
+                      className="rounded-xl border border-amber-400/25 bg-[#090712]/80 p-2.5 text-xs space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="font-bold text-amber-200">{card.title}</span>
+                          {card.subtitle && <span className="text-slate-400 ml-2">· {card.subtitle}</span>}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const remaining = (snapshot.session.scene_cards ?? []).filter((c) => c.id !== card.id)
+                            sendDMOverride({ action: 'SET_SCENE_CARDS', scene_cards: remaining })
+                          }}
+                          className="text-slate-400 hover:text-rose-400 p-1"
+                          title="Quitar tarjeta"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {card.kind === 'clock' && (
+                        <div className="flex items-center gap-1.5">
+                          {Array.from({ length: Math.max(2, card.segments) }).map((_, idx) => {
+                            const activeSeg = idx < card.filled
+                            return (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => {
+                                  const nextFilled = idx + 1 === card.filled ? idx : idx + 1
+                                  const updated = (snapshot.session.scene_cards ?? []).map((c) =>
+                                    c.id === card.id ? { ...c, filled: nextFilled } : c
+                                  )
+                                  sendDMOverride({ action: 'SET_SCENE_CARDS', scene_cards: updated })
+                                }}
+                                className={`h-2.5 flex-1 rounded-full transition ${
+                                  activeSeg ? 'bg-amber-400' : 'bg-slate-800 hover:bg-slate-700'
+                                }`}
+                                title={`Segmento ${idx + 1}/${card.segments}`}
+                              />
+                            )
+                          })}
+                          <span className="font-mono text-[11px] text-amber-200 ml-1">
+                            {card.filled}/{card.segments}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            {/* Dungeoneer CR Encounter Calculator + Mob Controller + Web Audio Soundboard */}
+            <section className="lg:col-span-6 rounded-2xl border border-violet-500/25 bg-[#120d22]/85 p-4 sm:p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-amber-200 flex items-center gap-2">
+                  <Swords className="w-4 h-4 text-rose-400" />
+                  Calculadora CR, Hordas &amp; Soundboard
+                </h2>
+                <label className="text-[11px] text-slate-300 flex items-center gap-1.5">
+                  Nivel Medio Grupo:
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={partyAvgLevel}
+                    onChange={(e) => setPartyAvgLevel(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+                    className="w-12 bg-[#090712] border border-violet-500/30 rounded px-1.5 py-0.5 text-amber-200 font-mono text-center"
+                  />
+                </label>
+              </div>
+
+              {(() => {
+                const enemyXPs = (snapshot.map_entities ?? [])
+                  .filter((e) => e.kind === 'enemy')
+                  .map((e) => crToXP(`${e.name} ${e.note || ''}`))
+                const evalRes = calculateEncounterDifficulty(Math.max(1, players.length), partyAvgLevel, enemyXPs)
+                const badgeColor =
+                  evalRes.label === 'Mortal'
+                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                    : evalRes.label === 'Difícil'
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                    : evalRes.label === 'Medio'
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-300 border-slate-600'
+                return (
+                  <div className="rounded-xl bg-[#090712]/70 border border-violet-500/20 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div>
+                      <span className="text-slate-400">Enemigos en mapa:</span>{' '}
+                      <strong className="text-white">{enemyXPs.length}</strong>{' '}
+                      <span className="text-slate-500">
+                        ({evalRes.baseXP} XP ×{evalRes.mult} = <strong className="text-amber-200">{evalRes.adjustedXP} XP</strong>)
+                      </span>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${badgeColor}`}>
+                      {evalRes.label} ({players.length || 1} PJ Nv.{partyAvgLevel})
+                    </span>
+                  </div>
+                )
+              })()}
+
+              {/* Mob Controller (bulk attack + damage vs AC) */}
+              <div className="rounded-xl bg-[#090712]/70 border border-violet-500/20 p-2.5 space-y-2 text-xs">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-rose-300">
+                  Ataque de Horda (Mob Controller)
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                  <input
+                    type="text"
+                    value={mobName}
+                    onChange={(e) => setMobName(e.target.value)}
+                    placeholder="Nombre"
+                    className="col-span-2 sm:col-span-1 bg-[#120d22] border border-violet-500/30 rounded px-2 py-1 text-white"
+                  />
+                  <label className="flex items-center gap-1 bg-[#120d22] border border-violet-500/30 rounded px-1.5 py-1 text-slate-300">
+                    <span className="text-[10px]">#</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={mobCount}
+                      onChange={(e) => setMobCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+                      className="w-full bg-transparent text-amber-200 font-mono"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1 bg-[#120d22] border border-violet-500/30 rounded px-1.5 py-1 text-slate-300">
+                    <span className="text-[10px]">+Atq</span>
+                    <input
+                      type="number"
+                      value={mobAtkBonus}
+                      onChange={(e) => setMobAtkBonus(Number(e.target.value) || 0)}
+                      className="w-full bg-transparent text-white font-mono"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1 bg-[#120d22] border border-violet-500/30 rounded px-1.5 py-1 text-slate-300">
+                    <span className="text-[10px]">CA</span>
+                    <input
+                      type="number"
+                      value={mobTargetAC}
+                      onChange={(e) => setMobTargetAC(Number(e.target.value) || 10)}
+                      className="w-full bg-transparent text-white font-mono"
+                    />
+                  </label>
+                  <input
+                    type="text"
+                    value={mobDmgNotation}
+                    onChange={(e) => setMobDmgNotation(e.target.value)}
+                    placeholder="1d6+2"
+                    className="bg-[#120d22] border border-violet-500/30 rounded px-2 py-1 text-emerald-200 font-mono"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    sendDMOverride({
+                      action: 'MOB_ROLL',
+                      mob_name: mobName.trim() || 'Horda',
+                      mob_count: mobCount,
+                      mob_atk_bonus: mobAtkBonus,
+                      mob_target_ac: mobTargetAC,
+                      mob_dmg_notation: mobDmgNotation.trim() || '1d6+2',
+                      mob_visibility: 'PUBLIC',
+                    })
+                  }
+                  className="w-full py-1.5 rounded-lg bg-rose-600/85 hover:bg-rose-500 text-white font-bold transition"
+                >
+                  Lanzar {mobCount} ataques de {mobName || 'Horda'} vs CA {mobTargetAC}
+                </button>
+              </div>
+
+              {/* Web Audio Tabletop Soundboard */}
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-emerald-300">
+                  <Volume2 className="w-3.5 h-3.5 text-emerald-300" />
+                  Soundboard Sincronizado (Web Audio)
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  {SOUNDBOARD_CLIPS.map((clip) => (
+                    <button
+                      key={clip.id}
+                      type="button"
+                      onClick={() => {
+                        playTabletopSound(clip.id)
+                        sendMessage('TEMPORARY_MAP_EVENT', {
+                          kind: 'sound',
+                          sound_id: clip.id,
+                          label: clip.label,
+                        })
+                      }}
+                      className="px-2 py-1.5 rounded-lg bg-[#090712] border border-violet-500/25 hover:border-emerald-400/50 text-[11px] text-slate-200 font-semibold truncate transition"
+                    >
+                      {clip.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+
         {/* Row 3: Tactical Map Control & Canvas (5x5 to 50x50) */}
         {snapshot && (
           <section className="rounded-2xl border border-violet-500/25 bg-[#120d22]/85 p-4 sm:p-5 space-y-4">
@@ -1214,6 +1550,83 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* Ogres Multi-Scene Preset Bar & Fog of War Quick Toggle */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-[#090712]/70 p-2.5 rounded-xl border border-violet-500/20 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    sendDMOverride({
+                      action: 'UPDATE_FOG',
+                      fog_enabled: !snapshot.session.fog_enabled,
+                    })
+                  }
+                  className={`px-2.5 py-1.5 rounded-lg font-bold border flex items-center gap-1.5 transition ${
+                    snapshot.session.fog_enabled
+                      ? 'bg-amber-500/20 border-amber-400/50 text-amber-200'
+                      : 'bg-[#120d22] border-violet-500/25 text-slate-300'
+                  }`}
+                >
+                  <CloudFog className="w-3.5 h-3.5" />
+                  {snapshot.session.fog_enabled ? 'Niebla: ACTIVA' : 'Niebla: OFF'}
+                </button>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    sendDMOverride({
+                      action: 'SAVE_SCENE',
+                      scene_name: newSceneName.trim() || `Escena ${(snapshot.map_scenes?.length ?? 0) + 1}`,
+                    })
+                    setNewSceneName('')
+                  }}
+                  className="flex items-center gap-1.5"
+                >
+                  <input
+                    type="text"
+                    value={newSceneName}
+                    onChange={(e) => setNewSceneName(e.target.value)}
+                    placeholder="Nombre de escena..."
+                    className="w-36 sm:w-44 bg-[#120d22] border border-violet-500/30 rounded-lg px-2 py-1 text-white"
+                  />
+                  <button
+                    type="submit"
+                    className="px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-bold flex items-center gap-1"
+                  >
+                    <Save className="w-3.5 h-3.5" /> Guardar Escena
+                  </button>
+                </form>
+              </div>
+
+              {(snapshot.map_scenes?.length ?? 0) > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400">Escenas:</span>
+                  {snapshot.map_scenes!.map((sc) => (
+                    <div
+                      key={sc.id}
+                      className="inline-flex items-center gap-1 rounded-lg bg-[#120d22] border border-violet-500/30 px-2 py-1"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => sendDMOverride({ action: 'ACTIVATE_SCENE', scene_id: sc.id })}
+                        className="text-amber-200 hover:text-white font-semibold"
+                        title={`Cargar ${sc.name} (${sc.map_cols}x${sc.map_rows})`}
+                      >
+                        {sc.name} ({sc.map_cols}×{sc.map_rows})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => sendDMOverride({ action: 'DELETE_SCENE', scene_id: sc.id })}
+                        className="text-slate-500 hover:text-rose-400"
+                        title="Eliminar escena"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* DM Map Mode Switch + Entity Spawner (Enemies, Traps, Items, NPCs, Hazards, Doors) */}
@@ -1489,6 +1902,21 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                           <button
                             type="button"
                             onClick={() =>
+                              setEntityTacticalOpenID((prev) => (prev === ent.id ? null : ent.id))
+                            }
+                            title="Estados y Aura del elemento"
+                            className={`text-xs px-1 rounded ${
+                              (ent.conditions?.length ?? 0) > 0 || (ent.aura_radius ?? 0) > 0
+                                ? 'text-amber-300 bg-amber-500/15'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            ⚡{(ent.conditions?.length ?? 0) > 0 ? ent.conditions!.length : ''}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
                               sendDMOverride({
                                 action: 'UPDATE_MAP_ENTITY',
                                 entity_id: ent.id,
@@ -1512,6 +1940,78 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                         </div>
                       )
                     })}
+
+                    {entityTacticalOpenID &&
+                      (() => {
+                        const targetEnt = snapshot.map_entities.find((e) => e.id === entityTacticalOpenID)
+                        if (!targetEnt) return null
+                        const curConds = targetEnt.conditions ?? []
+                        return (
+                          <div className="w-full mt-1 rounded-xl bg-[#090712]/90 border border-amber-400/35 p-2.5 space-y-2 text-[11px]">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="font-bold text-amber-200">
+                                Estados &amp; Aura de {targetEnt.name}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-slate-400">Aura (ft):</span>
+                                {[0, 10, 15, 20, 30].map((r) => (
+                                  <button
+                                    key={r}
+                                    type="button"
+                                    onClick={() =>
+                                      sendDMOverride({
+                                        action: 'UPDATE_ENTITY_TACTICAL',
+                                        entity_id: targetEnt.id,
+                                        conditions: curConds,
+                                        aura_radius: r,
+                                        aura_color: targetEnt.aura_color || targetEnt.color_hex,
+                                      })
+                                    }
+                                    className={`px-1.5 py-0.5 rounded font-mono ${
+                                      (targetEnt.aura_radius ?? 0) === r
+                                        ? 'bg-amber-400 text-slate-950 font-bold'
+                                        : 'bg-[#120d22] text-slate-300 border border-violet-500/20'
+                                    }`}
+                                  >
+                                    {r === 0 ? 'OFF' : `${r}ft`}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {DND_CONDITIONS.map((cond) => {
+                                const has = curConds.includes(cond.id)
+                                return (
+                                  <button
+                                    key={cond.id}
+                                    type="button"
+                                    title={cond.summary}
+                                    onClick={() => {
+                                      const next = has
+                                        ? curConds.filter((id) => id !== cond.id)
+                                        : [...curConds, cond.id]
+                                      sendDMOverride({
+                                        action: 'UPDATE_ENTITY_TACTICAL',
+                                        entity_id: targetEnt.id,
+                                        conditions: next,
+                                        aura_radius: targetEnt.aura_radius ?? 0,
+                                        aura_color: targetEnt.aura_color || targetEnt.color_hex,
+                                      })
+                                    }}
+                                    className={`px-1.5 py-0.5 rounded border transition ${
+                                      has
+                                        ? 'border-amber-400 bg-amber-500/20 text-amber-100 font-bold'
+                                        : 'border-violet-500/20 bg-[#120d22] text-slate-400 hover:text-white'
+                                    }`}
+                                  >
+                                    {cond.label}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      })()}
                   </div>
                 )}
               </div>
@@ -1521,13 +2021,20 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
               session={snapshot.session}
               players={snapshot.players}
               entities={snapshot.map_entities ?? []}
+              tempEvents={tempEvents}
               localPlayerID=""
               activePlayerID={snapshot.active_player_id}
+              localPlayerName="Dungeon Master"
+              localColor="#f59e0b"
               isDM
               dmMode={dmMapMode}
               selectedDMTarget={selectedTarget}
               onMoveToken={(pid, x, y) =>
                 sendDMOverride({ action: 'MOVE_ANY_TOKEN', target_player_id: pid, target_x: x, target_y: y })
+              }
+              onTempEvent={(ev) => sendMessage('TEMPORARY_MAP_EVENT', ev)}
+              onUpdateFog={(enabled, revealed) =>
+                sendDMOverride({ action: 'UPDATE_FOG', fog_enabled: enabled, fog_revealed: revealed })
               }
               onCellClick={(x, y) => {
                 if (dmMapMode === 'place') {
@@ -1566,6 +2073,15 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
           </section>
         )}
       </main>
+
+      <CertificateModal
+        open={certModalOpen}
+        onClose={() => setCertModalOpen(false)}
+        isDM
+        dmPIN={verifiedPIN}
+        onUsePublicURL={(url) => setCustomQrURL(url)}
+        onUseLocalHTTPS={(url) => setCustomQrURL(url)}
+      />
     </div>
   )
 }

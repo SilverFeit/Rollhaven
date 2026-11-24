@@ -438,6 +438,11 @@ export const DecisionSets: React.FC<DecisionSetsProps> = ({
                 { label: 'Ventaja (2d20kh1)', formula: '2d20kh1' },
                 { label: 'Desventaja (2d20kl1)', formula: '2d20kl1' },
                 { label: 'Atributo (4d6kh3)', formula: '4d6kh3' },
+                { label: 'Descartar (4d6dl1)', formula: '4d6dl1' },
+                { label: 'Explosivo (4d6!)', formula: '4d6!' },
+                { label: 'Reroll 1 (1d20ro1)', formula: '1d20ro1' },
+                { label: 'Éxitos (5d10cs>=6)', formula: '5d10cs>=6' },
+                { label: 'Fate (4dF)', formula: '4dF' },
                 { label: 'Mixto (2d6+1d4+3)', formula: '2d6+1d4+3' },
                 { label: 'Mitad ((1d20+4)/2)', formula: '(1d20+4)/2' },
               ].map((pr) => (

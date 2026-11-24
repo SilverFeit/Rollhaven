@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
-import { Sparkles, Swords } from 'lucide-react'
+import { Lock, Sparkles, Swords } from 'lucide-react'
 import { RACES, RaceSVG, TOKEN_COLORS } from './RaceIcons'
+import { CertificateModal } from './CertificateModal'
 
 interface PlayerOnboardingProps {
   onJoin: (payload: { name: string; initiative: number; race: string; color: string }) => void
@@ -14,6 +15,7 @@ export const PlayerOnboarding: React.FC<PlayerOnboardingProps> = ({ onJoin, conn
   const [race, setRace] = useState('human')
   const [color, setColor] = useState(TOKEN_COLORS[0])
   const [showCustomLook, setShowCustomLook] = useState(false)
+  const [certModalOpen, setCertModalOpen] = useState(false)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -144,8 +146,18 @@ export const PlayerOnboarding: React.FC<PlayerOnboardingProps> = ({ onJoin, conn
             <Swords className="w-5 h-5" />
             {connected ? 'Entrar a la Mesa' : 'Conectando con la mesa LAN...'}
           </button>
+
+          <button
+            type="button"
+            onClick={() => setCertModalOpen(true)}
+            className="w-full py-2 text-[11px] text-slate-400 hover:text-emerald-300 flex items-center justify-center gap-1.5 transition"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            ¿Ves aviso de "Sitio no seguro"? Instalar Certificado Local HTTPS
+          </button>
         </form>
       </div>
+      <CertificateModal open={certModalOpen} onClose={() => setCertModalOpen(false)} />
     </div>
   )
 }

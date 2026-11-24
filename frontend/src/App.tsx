@@ -19,6 +19,7 @@ const PlayerWorkspace: React.FC = () => {
     connected,
     playerID,
     lastBroadcast,
+    tempEvents,
     errorMsg,
     noteConflict,
     revoked,
@@ -185,10 +186,43 @@ const PlayerWorkspace: React.FC = () => {
           players={snapshot.players}
           activePlayerID={snapshot.active_player_id}
           localPlayerID={playerID}
+          roundNumber={snapshot.session.round_number ?? 1}
           currentTurnRolls={snapshot.current_turn_rolls}
           lastBroadcast={lastBroadcast}
           onEndTurn={() => sendMessage('END_TURN', {})}
         />
+
+        {/* Pinned Fari-style Scene Index Cards & Progress Clocks */}
+        {(snapshot.session.scene_cards?.length ?? 0) > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {snapshot.session.scene_cards!.map((card) => (
+              <div
+                key={card.id}
+                className="rounded-xl border border-amber-400/35 bg-[#120d22]/90 px-3 py-2.5 text-xs space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-amber-200 truncate">{card.title}</span>
+                  <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 font-semibold shrink-0">
+                    {card.kind === 'clock' ? `${card.filled}/${card.segments}` : 'Aspecto'}
+                  </span>
+                </div>
+                {card.subtitle && <div className="text-[11px] text-slate-400">{card.subtitle}</div>}
+                {card.kind === 'clock' && (
+                  <div className="flex gap-1 pt-0.5">
+                    {Array.from({ length: Math.max(2, card.segments) }).map((_, idx) => (
+                      <span
+                        key={idx}
+                        className={`h-2 flex-1 rounded-full ${
+                          idx < card.filled ? 'bg-amber-400' : 'bg-slate-800'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         {tab === 'DECISIONS' && (
           <DecisionSets
@@ -205,9 +239,13 @@ const PlayerWorkspace: React.FC = () => {
               session={snapshot.session}
               players={snapshot.players}
               entities={snapshot.map_entities ?? []}
+              tempEvents={tempEvents}
               localPlayerID={playerID}
               activePlayerID={snapshot.active_player_id}
+              localPlayerName={currentPlayer.name}
+              localColor={currentPlayer.color_hex}
               onMoveToken={(_pid, x, y) => sendMessage('MOVE_TOKEN', { target_x: x, target_y: y })}
+              onTempEvent={(ev) => sendMessage('TEMPORARY_MAP_EVENT', ev)}
             />
           </div>
         )}
@@ -231,6 +269,14 @@ const PlayerWorkspace: React.FC = () => {
           <CharacterSheetAndRaceTab
             player={currentPlayer}
             onUpdateProfile={(patch) => sendMessage('UPDATE_PROFILE', patch)}
+            onUpdateTactical={(patch) => sendMessage('UPDATE_TACTICAL_PLAYER', patch)}
+            onQuickRoll={(formula) =>
+              sendMessage('ROLL_ACTION', {
+                type: 'DICE',
+                dice_notation: formula,
+                visibility: 'PUBLIC',
+              })
+            }
           />
         )}
 
@@ -243,13 +289,39 @@ const PlayerWorkspace: React.FC = () => {
 
         {tab === 'NOTES' && <NotesTab playerID={currentPlayer.id} />}
       </main>
+
+      {/* Fari-style Floating Dice Action Button (Dice FAB) when viewing Map/Sheet/Chat/Notes */}
+      {tab !== 'DECISIONS' && currentPlayer.membership_status !== 'REVOKED' && !revoked && (
+        <div className="fixed bottom-5 right-4 z-40 flex items-center gap-1.5 bg-[#120d22]/95 border border-amber-400/50 rounded-full p-1.5 shadow-2xl shadow-violet-950">
+          <button
+            type="button"
+            onClick={() =>
+              sendMessage('ROLL_ACTION', { type: 'DICE', dice_notation: '1d20', visibility: 'PUBLIC' })
+            }
+            className="px-3 py-1.5 rounded-full bg-gradient-to-r from-violet-600 to-amber-500 text-white text-xs font-extrabold flex items-center gap-1"
+            title="Tirada rápida 1d20"
+          >
+            <Dices className="w-3.5 h-3.5" /> d20
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              sendMessage('ROLL_ACTION', { type: 'DICE', dice_notation: '2d20kh1', visibility: 'PUBLIC' })
+            }
+            className="px-2.5 py-1.5 rounded-full bg-[#090712] text-emerald-300 text-[11px] font-bold border border-emerald-500/30"
+            title="Ventaja 2d20kh1"
+          >
+            Ventaja
+          </button>
+        </div>
+      )}
     </div>
   )
 }
 
 export function App() {
   const [route, setRoute] = useState<string>(() => window.location.pathname)
-  const [appVersion, setAppVersion] = useState<string>('1.4.0')
+  const [appVersion, setAppVersion] = useState<string>('1.5.0')
   const [appLicense, setAppLicense] = useState<string>('MIT')
 
   useEffect(() => {

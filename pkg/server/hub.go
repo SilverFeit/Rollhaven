@@ -54,6 +54,7 @@ type StateSnapshot struct {
 	CampaignSessions []store.CampaignSession `json:"campaign_sessions"`
 	Players          []store.Player          `json:"players"`
 	MapEntities      []store.MapEntity       `json:"map_entities"`
+	MapScenes        []store.MapScene        `json:"map_scenes"`
 	CampaignNotes    []store.CampaignNote    `json:"campaign_notes"`
 	ChatMessages     []store.ChatMessage     `json:"chat_messages"`
 	RollTables       []store.RollTable       `json:"roll_tables"`
@@ -87,10 +88,11 @@ type clientTarget struct {
 
 // Hub coordinates WebSocket clients, campaign state, privacy-filtered sync, turns, and broadcasts.
 type Hub struct {
-	store *store.Store
-	lanIP string
-	port  int
-	dmPIN string
+	store  *store.Store
+	lanIP  string
+	port   int
+	dmPIN  string
+	tunnel *TunnelManager
 
 	mu               sync.RWMutex
 	closed           bool
@@ -102,8 +104,11 @@ type Hub struct {
 	strictTurnMove   bool
 }
 
-// Close marks the hub closed and terminates any active WebSocket clients cleanly.
+// Close marks the hub closed, stops any active public tunnel, and terminates WebSocket clients cleanly.
 func (h *Hub) Close() {
+	if h.tunnel != nil {
+		_ = h.tunnel.Stop()
+	}
 	h.mu.Lock()
 	h.closed = true
 	targets := make([]*wsClient, 0, len(h.clients))
@@ -259,6 +264,7 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 	}
 
 	notes, _ := h.store.ListCampaignNotesForViewer(activeCamp.ID, viewerID, isDM)
+	mapScenes, _ := h.store.ListMapScenes(activeCamp.ID)
 	chats, _ := h.store.ListChatMessagesForViewer(activeCamp.ID, viewerID, isDM, 100)
 	rollTables, _ := h.store.ListRollTables(activeCamp.ID)
 	logs, err := h.store.ListActionLogForViewer(activeCamp.ID, viewerID, isDM, 60)
@@ -312,6 +318,7 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 		CampaignSessions: campSessions,
 		Players:          players,
 		MapEntities:      mapEntities,
+		MapScenes:        mapScenes,
 		CampaignNotes:    notes,
 		ChatMessages:     chats,
 		RollTables:       rollTables,
@@ -758,6 +765,51 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 			return
 		}
 		h.handleRollTableExec(ctx, c, msg.PlayerID, msg.Payload)
+
+	case "TEMPORARY_MAP_EVENT":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
+		// Ephemeral canvas pointer, 5ft ruler, AoE template, freehand draw, or soundboard cue (PlanarAlly temporary pattern; no SQLite write).
+		pid, _ := h.getClientIdentity(c)
+		if pid == "" {
+			pid = msg.PlayerID
+		}
+		h.broadcastRaw(WSMessage{
+			Event:    "TEMPORARY_MAP_EVENT",
+			PlayerID: pid,
+			Payload:  msg.Payload,
+		})
+
+	case "UPDATE_TACTICAL_PLAYER":
+		if !h.ensureNotRevoked(ctx, c) {
+			return
+		}
+		var req struct {
+			TargetPlayerID string          `json:"target_player_id"`
+			Conditions     []string        `json:"conditions"`
+			AuraRadius     *int            `json:"aura_radius"`
+			AuraColor      *string         `json:"aura_color"`
+			StatsJSON      json.RawMessage `json:"stats_json"`
+		}
+		if err := json.Unmarshal(msg.Payload, &req); err != nil {
+			h.sendError(ctx, c, "Payload UPDATE_TACTICAL_PLAYER inválido")
+			return
+		}
+		pid, isDM := h.getClientIdentity(c)
+		targetID := strings.TrimSpace(req.TargetPlayerID)
+		if targetID == "" {
+			targetID = pid
+		}
+		if !isDM && targetID != pid {
+			h.sendError(ctx, c, "No puedes modificar el estado táctico de otro jugador")
+			return
+		}
+		if err := h.store.UpdatePlayerTacticalState(targetID, req.Conditions, req.AuraRadius, req.AuraColor, req.StatsJSON); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		h.BroadcastStateSync()
 
 	case "DM_OVERRIDE":
 		h.handleDMOverride(ctx, c, msg.Payload)
@@ -1247,6 +1299,9 @@ func (h *Hub) handleEndTurn(ctx context.Context, c *wsClient, fallbackID string)
 		h.sendError(ctx, c, err.Error())
 		return
 	}
+	if nextIdx == 0 && len(snap.Players) > 0 {
+		_ = h.store.IncrementRound()
+	}
 
 	prevName := snap.Players[snap.CurrentTurnIndex].Name
 	nextName := snap.Players[nextIdx].Name
@@ -1306,6 +1361,20 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 		TableName       string                 `json:"table_name"`
 		TableDesc       string                 `json:"table_desc"`
 		TableEntries    []store.RollTableEntry `json:"table_entries"`
+		FogEnabled      *bool                  `json:"fog_enabled"`
+		FogRevealed     []string               `json:"fog_revealed"`
+		SceneCards      []store.SceneCard      `json:"scene_cards"`
+		SceneID         string                 `json:"scene_id"`
+		SceneName       string                 `json:"scene_name"`
+		Conditions      []string               `json:"conditions"`
+		AuraRadius      *int                   `json:"aura_radius"`
+		AuraColor       *string                `json:"aura_color"`
+		MobName         string                 `json:"mob_name"`
+		MobCount        int                    `json:"mob_count"`
+		MobAtkBonus     int                    `json:"mob_atk_bonus"`
+		MobTargetAC     int                    `json:"mob_target_ac"`
+		MobDmgNotation  string                 `json:"mob_dmg_notation"`
+		MobVisibility   string                 `json:"mob_visibility"`
 	}
 	if err := json.Unmarshal(payload, &cmd); err != nil {
 		h.sendError(ctx, c, "Payload DM_OVERRIDE inválido")
@@ -1343,6 +1412,9 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 		if err == nil && len(snap.Players) > 0 {
 			nextIdx := engine.NextTurnIndex(snap.CurrentTurnIndex, len(snap.Players))
 			_ = h.store.UpdateCurrentTurnIndex(nextIdx)
+			if nextIdx == 0 {
+				_ = h.store.IncrementRound()
+			}
 			h.mu.Lock()
 			h.currentTurnRolls = nil
 			h.mu.Unlock()
@@ -1600,6 +1672,154 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 			h.sendError(ctx, c, err.Error())
 			return
 		}
+
+	case "UPDATE_FOG":
+		sess, err := h.store.GetSession()
+		if err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		fogEn := sess.FogEnabled
+		if cmd.FogEnabled != nil {
+			fogEn = *cmd.FogEnabled
+		}
+		revealed := cmd.FogRevealed
+		if revealed == nil {
+			revealed = sess.FogRevealed
+		}
+		if err := h.store.UpdateFogState(fogEn, revealed); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+
+	case "SET_SCENE_CARDS":
+		if err := h.store.SetSceneCards(cmd.SceneCards); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+
+	case "SAVE_SCENE":
+		sc, err := h.store.SaveCurrentScene(campID, cmd.SceneName)
+		if err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "SCENE_SAVE", fmt.Sprintf("Guardó escena táctica %q (%dx%d)", sc.Name, sc.MapCols, sc.MapRows))
+
+	case "ACTIVATE_SCENE":
+		if err := h.store.ActivateMapScene(cmd.SceneID); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "SCENE_ACTIVATE", fmt.Sprintf("Cambió escena activa a %s", cmd.SceneID))
+
+	case "DELETE_SCENE":
+		if err := h.store.DeleteMapScene(cmd.SceneID); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+
+	case "UPDATE_ENTITY_TACTICAL":
+		if err := h.store.UpdateMapEntityTactical(cmd.EntityID, cmd.Conditions, cmd.AuraRadius, cmd.AuraColor); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+
+	case "MOB_ROLL":
+		count := cmd.MobCount
+		if count < 1 {
+			count = 1
+		} else if count > 50 {
+			count = 50
+		}
+		mobName := strings.TrimSpace(cmd.MobName)
+		if mobName == "" {
+			mobName = "Horda"
+		}
+		dmgExpr := strings.TrimSpace(cmd.MobDmgNotation)
+		if dmgExpr == "" {
+			dmgExpr = "1d6+2"
+		}
+		type mobHitDetail struct {
+			AttackRoll int  `json:"d20"`
+			TotalAtk   int  `json:"total_atk"`
+			Hit        bool `json:"hit"`
+			Crit       bool `json:"crit"`
+			Damage     int  `json:"damage"`
+		}
+		attacks := make([]mobHitDetail, 0, count)
+		hits := 0
+		crits := 0
+		totalDmg := 0
+		for i := 0; i < count; i++ {
+			d20, dErr := engine.CryptoRandInt(1, 20)
+			if dErr != nil {
+				h.sendError(ctx, c, dErr.Error())
+				return
+			}
+			totalAtk := d20 + cmd.MobAtkBonus
+			isCrit := d20 == 20
+			isHit := isCrit || (d20 != 1 && totalAtk >= cmd.MobTargetAC)
+			dmg := 0
+			if isHit {
+				hits++
+				dRes, dErr := engine.RollDice(dmgExpr)
+				if dErr != nil {
+					h.sendError(ctx, c, dErr.Error())
+					return
+				}
+				dmg = dRes.Total
+				if isCrit {
+					crits++
+					// Roll extra critical damage dice (subtotal of dice without flat modifier repeated)
+					dmg += dRes.Subtotal
+				}
+				if dmg < 0 {
+					dmg = 0
+				}
+				totalDmg += dmg
+			}
+			attacks = append(attacks, mobHitDetail{
+				AttackRoll: d20,
+				TotalAtk:   totalAtk,
+				Hit:        isHit,
+				Crit:       isCrit,
+				Damage:     dmg,
+			})
+		}
+
+		vis := store.NormalizeRollVisibility(cmd.MobVisibility)
+		summary := fmt.Sprintf("Horda %s (%dx vs CA %d): %d impactos (%d crít.), Daño total: %d", mobName, count, cmd.MobTargetAC, hits, crits, totalDmg)
+		detail := map[string]any{
+			"mob_name":        mobName,
+			"count":           count,
+			"attack_bonus":    cmd.MobAtkBonus,
+			"target_ac":       cmd.MobTargetAC,
+			"damage_notation": dmgExpr,
+			"hits":            hits,
+			"crits":           crits,
+			"total_damage":    totalDmg,
+			"attacks":         attacks,
+		}
+		entry, _ := h.store.AppendActionLogScoped(campID, "dm", "dm", "Dungeon Master", "MOB_ROLL", summary, vis, "", detail)
+		rb := RollBroadcast{
+			ID:            entry.ID,
+			Timestamp:     time.Now().UTC(),
+			PlayerID:      "dm",
+			PlayerName:    "Dungeon Master",
+			PlayerColor:   "#f59e0b",
+			RaceIcon:      "dm",
+			SetType:       "DICE",
+			ResultSummary: summary,
+			Detail:        detail,
+			Visibility:    vis,
+			IsCritical:    crits > 0,
+		}
+		h.mu.Lock()
+		h.currentTurnRolls = append(h.currentTurnRolls, rb)
+		h.lastResult = &rb
+		h.mu.Unlock()
+		h.broadcastResultFiltered(rb)
 	}
 
 	h.BroadcastStateSync()

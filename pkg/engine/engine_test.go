@@ -324,3 +324,77 @@ func TestAdvancedDiceASTAndSecurityLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestMapToolDicelibExtensions(t *testing.T) {
+	// Drop lowest & drop highest (4d6dl1, 2d20dh1)
+	dl, err := engine.RollDice("4d6dl1")
+	if err != nil || len(dl.Rolls) != 4 || len(dl.Terms[0].Kept) != 3 {
+		t.Fatalf("4d6dl1 failed: err=%v res=%+v", err, dl)
+	}
+	dh, err := engine.RollDice("2d20dh1")
+	if err != nil || len(dh.Rolls) != 2 || len(dh.Terms[0].Kept) != 1 {
+		t.Fatalf("2d20dh1 failed: err=%v res=%+v", err, dh)
+	}
+
+	// Exploding dice (4d2! has 50% explosion rate so extra rolls appear very quickly)
+	sawExplosion := false
+	for i := 0; i < 40; i++ {
+		exp, err := engine.RollDice("4d2!")
+		if err != nil {
+			t.Fatalf("4d2! error: %v", err)
+		}
+		if len(exp.Rolls) > 4 {
+			sawExplosion = true
+			break
+		}
+	}
+	if !sawExplosion {
+		t.Fatalf("expected exploding dice to produce > 4 rolls across 40 trials of 4d2!")
+	}
+
+	// Reroll (r1 eliminates 1s with 10 attempts, ro1 rerolls once)
+	for i := 0; i < 30; i++ {
+		rRes, err := engine.RollDice("4d6r1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rRes.Rolls) != 4 {
+			t.Fatalf("4d6r1 length mismatch: %+v", rRes)
+		}
+		roRes, err := engine.RollDice("2d20ro1")
+		if err != nil || len(roRes.Rolls) != 2 {
+			t.Fatalf("2d20ro1 error: err=%v res=%+v", err, roRes)
+		}
+	}
+
+	// Count successes (cs>=6)
+	csRes, err := engine.RollDice("10d10cs>=6")
+	if err != nil {
+		t.Fatalf("10d10cs>=6 error: %v", err)
+	}
+	expectedHits := 0
+	for _, v := range csRes.Rolls {
+		if v >= 6 {
+			expectedHits++
+		}
+	}
+	if csRes.Total != expectedHits {
+		t.Fatalf("success count mismatch: got %d want %d", csRes.Total, expectedHits)
+	}
+
+	// Fate / Fudge dice (4dF)
+	for i := 0; i < 30; i++ {
+		fRes, err := engine.RollDice("4dF")
+		if err != nil {
+			t.Fatalf("4dF error: %v", err)
+		}
+		if fRes.Total < -4 || fRes.Total > 4 || len(fRes.Rolls) != 4 {
+			t.Fatalf("4dF out of [-4,+4] range: %+v", fRes)
+		}
+		for _, r := range fRes.Rolls {
+			if r < -1 || r > 1 {
+				t.Fatalf("fudge die out of [-1,+1]: %d", r)
+			}
+		}
+	}
+}

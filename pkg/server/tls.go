@@ -2,9 +2,11 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -15,15 +17,20 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
 
-// TLSAssets holds the local Root CA PEM and the server tls.Config for HTTPS + WSS on LAN.
+// TLSAssets holds the local Root CA PEM, path, fingerprint, and tls.Config for HTTPS + WSS on LAN.
 type TLSAssets struct {
-	Config    *tls.Config
-	CACertPEM []byte
+	Config              *tls.Config
+	CACertPEM           []byte
+	CACertPath          string
+	CAFingerprintSHA256 string
 }
 
 // EnsureTLSAssets loads or generates a persistent local Root CA under <dataDir>/tls/
@@ -55,9 +62,94 @@ func EnsureTLSAssets(dataDir, lanIP string) (*TLSAssets, error) {
 	}
 
 	return &TLSAssets{
-		Config:    cfg,
-		CACertPEM: caPEM,
+		Config:              cfg,
+		CACertPEM:           caPEM,
+		CACertPath:          caCertPath,
+		CAFingerprintSHA256: CACertFingerprintSHA256(caPEM),
 	}, nil
+}
+
+// CACertFingerprintSHA256 formats the SHA-256 fingerprint of a PEM CA certificate.
+func CACertFingerprintSHA256(caPEM []byte) string {
+	block, _ := pem.Decode(caPEM)
+	if block == nil {
+		return ""
+	}
+	sum := sha256.Sum256(block.Bytes)
+	parts := make([]string, len(sum))
+	for i, b := range sum {
+		parts[i] = fmt.Sprintf("%02X", b)
+	}
+	return strings.Join(parts, ":")
+}
+
+// BuildSSLIPHost returns the canonical sslip.io DNS alias for a LAN IPv4 address.
+func BuildSSLIPHost(lanIP string) string {
+	clean := strings.TrimSpace(lanIP)
+	if clean == "" {
+		return ""
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(clean, ".", "-"), ":", "-") + ".sslip.io"
+}
+
+// IsHostCATrusted checks whether the host OS already trusts the local Rollhaven Root CA.
+func IsHostCATrusted(caCertPath string) bool {
+	if strings.TrimSpace(caCertPath) == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.CommandContext(ctx, "security", "verify-cert", "-c", caCertPath)
+		return cmd.Run() == nil
+	case "windows":
+		cmd := exec.CommandContext(ctx, "certutil", "-user", "-verifystore", "Root", "Rollhaven Local LAN Root CA")
+		return cmd.Run() == nil
+	default:
+		return false
+	}
+}
+
+// TrustCAOnHost installs rollhaven-ca.crt into the host OS user trust store (or opens Keychain Access on macOS if prompt is required).
+func TrustCAOnHost(caCertPath string) (trusted bool, message string, err error) {
+	if strings.TrimSpace(caCertPath) == "" {
+		return false, "", fmt.Errorf("ruta de certificado CA vacía")
+	}
+	if IsHostCATrusted(caCertPath) {
+		return true, "Este equipo ya confía en el certificado raíz local de Rollhaven.", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	switch runtime.GOOS {
+	case "darwin":
+		home, _ := os.UserHomeDir()
+		loginKC := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+		out, cmdErr := exec.CommandContext(ctx, "security", "add-trusted-cert", "-r", "trustRoot", "-k", loginKC, caCertPath).CombinedOutput()
+		if cmdErr == nil && IsHostCATrusted(caCertPath) {
+			return true, "Certificado instalado y confiado en tu Llavero de inicio de sesión (macOS). Reinicia el navegador para ver el candado.", nil
+		}
+		// Fallback: open certificate directly in Keychain Access UI for explicit user confirmation
+		_ = exec.Command("open", "-a", "Keychain Access", caCertPath).Run()
+		hint := strings.TrimSpace(string(out))
+		if hint != "" {
+			hint = " (" + hint + ")"
+		}
+		return false, "Se abrió Acceso a Llaveros con rollhaven-ca.crt. Haz doble clic en 'Rollhaven Local LAN Root CA' → Confiar → Confiar siempre" + hint, nil
+
+	case "windows":
+		out, cmdErr := exec.CommandContext(ctx, "certutil", "-user", "-addstore", "Root", caCertPath).CombinedOutput()
+		if cmdErr == nil {
+			return true, "Certificado instalado en el almacén Raíz de usuario en Windows. Reinicia el navegador.", nil
+		}
+		return false, "", fmt.Errorf("certutil falló (%v): %s", cmdErr, strings.TrimSpace(string(out)))
+
+	default:
+		return false, fmt.Sprintf("Instala manualmente %s en el almacén de certificados de confianza de tu sistema.", caCertPath), nil
+	}
 }
 
 func loadOrCreateCA(certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKey, []byte, error) {
@@ -133,8 +225,12 @@ func issueServerCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, lanIP st
 	}
 
 	ips := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	dnsNames := []string{"localhost", "rollhaven.local"}
 	if parsed := net.ParseIP(lanIP); parsed != nil {
 		ips = append(ips, parsed)
+		if sslip := BuildSSLIPHost(lanIP); sslip != "" {
+			dnsNames = append(dnsNames, sslip, strings.Replace(sslip, ".sslip.io", ".nip.io", 1))
+		}
 	}
 
 	now := time.Now().UTC()
@@ -148,7 +244,7 @@ func issueServerCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, lanIP st
 		NotAfter:    now.Add(820 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{"localhost", "rollhaven.local"},
+		DNSNames:    dnsNames,
 		IPAddresses: ips,
 	}
 
