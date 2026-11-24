@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/SilverFeit/Rollhaven/pkg/compendium"
 	appembed "github.com/SilverFeit/Rollhaven/pkg/embed"
 	"github.com/SilverFeit/Rollhaven/pkg/store"
 	"github.com/go-chi/chi/v5"
@@ -27,6 +29,7 @@ type Server struct {
 	Router              *chi.Mux
 	Hub                 *Hub
 	Store               *store.Store
+	Compendium          compendium.CompendiumRepository
 	Tunnel              *TunnelManager
 	DataDir             string
 	UploadDir           string
@@ -153,6 +156,11 @@ func (s *Server) mountRoutes() {
 		api.Post("/campaigns/import", s.handleImportCampaign)
 		api.Get("/backups/download", s.handleDownloadBackupZip)
 		api.Post("/backups/restore", s.handleRestoreBackupZip)
+
+		api.Get("/compendium/status", s.handleCompendiumStatus)
+		api.Post("/compendium/import", s.handleCompendiumImport)
+		api.Get("/compendium/{category}", s.handleCompendiumList)
+		api.Get("/compendium/{category}/{slug}", s.handleCompendiumGet)
 	})
 
 	// Serve uploaded maps & character sheets
@@ -818,4 +826,81 @@ func (s *Server) handleRestoreBackupZip(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Hub.BroadcastStateSync()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
+}
+
+func (s *Server) handleCompendiumStatus(w http.ResponseWriter, r *http.Request) {
+	if s.Compendium == nil {
+		writeJSON(w, http.StatusOK, compendium.CompendiumStatus{
+			Driver:    "none",
+			Connected: false,
+			Ruleset:   "2024",
+			Counts:    map[string]int{},
+			Error:     "Compendio no inicializado",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Compendium.HealthCheck())
+}
+
+func (s *Server) handleCompendiumList(w http.ResponseWriter, r *http.Request) {
+	if s.Compendium == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Compendio no inicializado"})
+		return
+	}
+	cat := chi.URLParam(r, "category")
+	filter := compendium.ListFilter{
+		Query:       r.URL.Query().Get("q"),
+		Ruleset:     r.URL.Query().Get("ruleset"),
+		ClassSlug:   r.URL.Query().Get("class"),
+		SubCategory: r.URL.Query().Get("category"),
+	}
+	if lvlStr := strings.TrimSpace(r.URL.Query().Get("level")); lvlStr != "" {
+		if lvl, err := strconv.Atoi(lvlStr); err == nil {
+			filter.Level = &lvl
+		}
+	}
+	entries, err := s.Compendium.ListEntries(cat, filter)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": entries, "count": len(entries)})
+}
+
+func (s *Server) handleCompendiumGet(w http.ResponseWriter, r *http.Request) {
+	if s.Compendium == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Compendio no inicializado"})
+		return
+	}
+	cat := chi.URLParam(r, "category")
+	slug := chi.URLParam(r, "slug")
+	entry, err := s.Compendium.GetEntry(cat, slug)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Entrada no encontrada"})
+		return
+	}
+	writeJSON(w, http.StatusOK, entry)
+}
+
+func (s *Server) handleCompendiumImport(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede importar al compendio"})
+		return
+	}
+	if s.Compendium == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Compendio no inicializado"})
+		return
+	}
+	var bundle compendium.CompendiumBundle
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 25<<20)).Decode(&bundle); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON de compendio inválido"})
+		return
+	}
+	count, err := s.Compendium.ImportBundle(bundle)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"imported": count})
 }

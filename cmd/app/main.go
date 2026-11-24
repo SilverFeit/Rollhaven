@@ -15,13 +15,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SilverFeit/Rollhaven/pkg/compendium"
 	"github.com/SilverFeit/Rollhaven/pkg/database"
 	"github.com/SilverFeit/Rollhaven/pkg/network"
 	"github.com/SilverFeit/Rollhaven/pkg/server"
 	"github.com/SilverFeit/Rollhaven/pkg/store"
 )
 
-var version = "1.5.0"
+var version = "2.0.0-alpha"
 
 func main() {
 	port := flag.Int("port", 8080, "Puerto HTTP/WebSocket local del servidor")
@@ -29,6 +30,9 @@ func main() {
 	noBrowser := flag.Bool("no-browser", false, "Desactivar apertura automática del navegador")
 	dataDir := flag.String("data-dir", "", "Directorio de datos para SQLite y uploads (por defecto ./data junto al ejecutable o cwd)")
 	pinFlag := flag.String("pin", "", "PIN opcional de 4 dígitos para el Dungeon Master (por defecto autogenerado)")
+	compDriver := flag.String("compendium-driver", os.Getenv("ROLLHAVEN_COMPENDIUM_DRIVER"), "Motor de BD del compendio: sqlite | postgres (por defecto sqlite)")
+	compDSN := flag.String("compendium-dsn", os.Getenv("ROLLHAVEN_COMPENDIUM_DSN"), "DSN o ruta del compendio (ej. postgres://... para DietPi o ruta .db)")
+	importComp := flag.String("import-compendium", "", "Ruta local a JSON o bóveda Obsidian (.md) para importar al compendio")
 	showVersion := flag.Bool("version", false, "Mostrar versión y salir")
 	flag.Parse()
 
@@ -51,6 +55,29 @@ func main() {
 		log.Fatalf("Error inicializando store: %v", err)
 	}
 
+	resolvedCompDriver := *compDriver
+	if resolvedCompDriver == "" {
+		resolvedCompDriver = "sqlite"
+	}
+	resolvedCompDSN := *compDSN
+	if resolvedCompDSN == "" && resolvedCompDriver == "sqlite" {
+		resolvedCompDSN = filepath.Join(resolvedDataDir, "compendium_demo.db")
+	}
+	compRepo, err := compendium.Open(resolvedCompDriver, resolvedCompDSN)
+	if err != nil {
+		log.Fatalf("Error inicializando compendio (%s): %v", resolvedCompDriver, err)
+	}
+	defer compRepo.Close()
+
+	if *importComp != "" {
+		n, impErr := compRepo.ImportFromPath(*importComp)
+		if impErr != nil {
+			log.Printf("Aviso importando compendio desde %s: %v", *importComp, impErr)
+		} else {
+			log.Printf("Compendio importado: %d entradas desde %s", n, *importComp)
+		}
+	}
+
 	lanIP, err := network.GetLocalIP()
 	if err != nil || lanIP == "" {
 		lanIP = "127.0.0.1"
@@ -60,6 +87,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error inicializando servidor: %v", err)
 	}
+	srv.Compendium = compRepo
 	srv.Version = version
 
 	addr := fmt.Sprintf("0.0.0.0:%d", *port)
