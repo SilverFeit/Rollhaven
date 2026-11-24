@@ -234,6 +234,25 @@ export interface WheelDetail {
   options: string[]
 }
 
+export interface RollSource {
+  kind: 'weapon' | 'spell' | 'skill' | 'save' | 'ability' | 'feature' | 'monster' | 'initiative' | string
+  name: string
+  subtitle?: string
+}
+
+export interface InteractiveRollAction {
+  id: string
+  kind: 'SAVE' | 'DAMAGE' | 'CHECK' | 'HEAL' | string
+  label: string
+  ability?: AbilityKey | string
+  skill?: string
+  dc?: number
+  formula?: string
+  damage_type?: string
+}
+
+export type AbilityKey = 'FUE' | 'DES' | 'CON' | 'INT' | 'SAB' | 'CAR'
+
 export interface RollBroadcast {
   id: number
   timestamp: string
@@ -241,7 +260,7 @@ export interface RollBroadcast {
   player_name: string
   player_color: string
   race_icon: string
-  set_type: 'DICE' | 'COIN' | 'MAGIC_8_BALL' | 'SPINNER' | 'WHEEL'
+  set_type: 'DICE' | 'COIN' | 'MAGIC_8_BALL' | 'SPINNER' | 'WHEEL' | 'ABILITY_CARD'
   result_summary: string
   detail: DiceDetail | CoinDetail | Magic8Detail | SpinnerDetail | WheelDetail | Record<string, unknown> | null
   visibility?: RollVisibility
@@ -251,6 +270,10 @@ export interface RollBroadcast {
   is_fumble?: boolean
   is_edge?: boolean
   out_of_turn?: boolean
+  source?: RollSource
+  interactive_actions?: InteractiveRollAction[]
+  target_dc?: number
+  save_outcome?: 'SUCCESS' | 'FAILURE' | string
 }
 
 export interface ActionLogEntry {

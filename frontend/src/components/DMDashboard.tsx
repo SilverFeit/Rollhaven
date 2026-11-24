@@ -47,6 +47,7 @@ import { useDiceboundSocket } from '../hooks/useDiceboundSocket'
 import { MapEntityKind, SceneCard } from '../types'
 import { DND_CONDITIONS, SOUNDBOARD_CLIPS, calculateEncounterDifficulty, crToXP, playTabletopSound } from '../lib/srdCompendiumAndGenerators'
 import { CertificateModal } from './CertificateModal'
+import { CharacterWizard } from './CharacterWizard'
 import { CompanionHub } from './CompanionHub'
 import { DecisionSets } from './DecisionSets'
 import { RaceSVG } from './RaceIcons'
@@ -198,6 +199,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
   const [mobTargetAC, setMobTargetAC] = useState(15)
   const [mobDmgNotation, setMobDmgNotation] = useState('1d6+2')
   const [entityTacticalOpenID, setEntityTacticalOpenID] = useState<string | null>(null)
+  const [wizardTarget, setWizardTarget] = useState<{ userID?: string; playerID?: string; name?: string } | null>(null)
 
   useEffect(() => {
     fetch('/api/v1/dm/status')
@@ -754,6 +756,13 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
               <div className="flex items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => setWizardTarget({})}
+                  className="px-3 py-1.5 rounded-xl bg-violet-600/80 hover:bg-violet-500 text-white text-xs font-bold flex items-center gap-1"
+                >
+                  <Sparkles className="w-3.5 h-3.5" /> + Crear Hoja (Wizard)
+                </button>
+                <button
+                  type="button"
                   onClick={() => sendDMOverride({ action: 'PREV_TURN' })}
                   className="px-3 py-1.5 rounded-xl bg-[#090712] border border-violet-500/30 hover:border-amber-400/50 text-xs font-semibold flex items-center gap-1"
                 >
@@ -850,25 +859,35 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                             </div>
                           </td>
                           <td className="py-2.5 pr-2">
-                            <select
-                              value={p.character_id || ''}
-                              onChange={(e) =>
-                                sendDMOverride({
-                                  action: 'ASSIGN_CHARACTER',
-                                  target_player_id: p.id,
-                                  user_id: p.user_id || '',
-                                  character_id: e.target.value,
-                                })
-                              }
-                              className="max-w-[170px] px-2 py-1 rounded bg-[#090712] border border-violet-500/30 text-slate-200 text-[11px]"
-                            >
-                              <option value="">Sin hoja asignada</option>
-                              {(snapshot?.characters ?? []).map((ch) => (
-                                <option key={ch.id} value={ch.id}>
-                                  {ch.name} (Nv.{ch.level})
-                                </option>
-                              ))}
-                            </select>
+                            <div className="flex items-center gap-1">
+                              <select
+                                value={p.character_id || ''}
+                                onChange={(e) =>
+                                  sendDMOverride({
+                                    action: 'ASSIGN_CHARACTER',
+                                    target_player_id: p.id,
+                                    user_id: p.user_id || '',
+                                    character_id: e.target.value,
+                                  })
+                                }
+                                className="max-w-[155px] px-2 py-1 rounded bg-[#090712] border border-violet-500/30 text-slate-200 text-[11px]"
+                              >
+                                <option value="">Sin hoja asignada</option>
+                                {(snapshot?.characters ?? []).map((ch) => (
+                                  <option key={ch.id} value={ch.id}>
+                                    {ch.name} (Nv.{ch.level})
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => setWizardTarget({ userID: p.user_id, playerID: p.id, name: p.name })}
+                                className="px-1.5 py-1 rounded bg-violet-600/35 hover:bg-violet-600 text-violet-200 text-[10px] font-bold"
+                                title="Crear nueva hoja con Wizard para este jugador"
+                              >
+                                +
+                              </button>
+                            </div>
                           </td>
                           <td className="py-2.5 pr-2 font-mono text-slate-300">{p.client_ip || 'LAN'}</td>
                           <td className="py-2.5 pr-2 text-slate-400">{parseDeviceLabel(p.user_agent)}</td>
@@ -2103,6 +2122,13 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
         dmPIN={verifiedPIN}
         onUsePublicURL={(url) => setCustomQrURL(url)}
         onUseLocalHTTPS={(url) => setCustomQrURL(url)}
+      />
+      <CharacterWizard
+        open={Boolean(wizardTarget)}
+        onClose={() => setWizardTarget(null)}
+        targetUserID={wizardTarget?.userID}
+        targetPlayerID={wizardTarget?.playerID}
+        defaultName={wizardTarget?.name || ''}
       />
     </div>
   )
