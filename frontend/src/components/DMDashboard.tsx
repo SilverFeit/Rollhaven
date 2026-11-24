@@ -801,7 +801,8 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                 <thead>
                   <tr className="border-b border-violet-500/20 text-slate-400 uppercase text-[11px]">
                     <th className="py-2 pr-2">Orden</th>
-                    <th className="py-2 pr-2">Jugador</th>
+                    <th className="py-2 pr-2">Jugador / Username</th>
+                    <th className="py-2 pr-2">Personaje Asignado</th>
                     <th className="py-2 pr-2">IP Cliente</th>
                     <th className="py-2 pr-2">Dispositivo</th>
                     <th className="py-2 pr-2">Estado</th>
@@ -812,7 +813,7 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                 <tbody className="divide-y divide-violet-500/10">
                   {players.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-400">
+                      <td colSpan={8} className="py-8 text-center text-slate-400">
                         Esperando a que los jugadores se conecten desde {lanURL}...
                       </td>
                     </tr>
@@ -847,6 +848,27 @@ export const DMDashboard: React.FC<{ onGoPlayerView: () => void }> = ({ onGoPlay
                                 </span>
                               )}
                             </div>
+                          </td>
+                          <td className="py-2.5 pr-2">
+                            <select
+                              value={p.character_id || ''}
+                              onChange={(e) =>
+                                sendDMOverride({
+                                  action: 'ASSIGN_CHARACTER',
+                                  target_player_id: p.id,
+                                  user_id: p.user_id || '',
+                                  character_id: e.target.value,
+                                })
+                              }
+                              className="max-w-[170px] px-2 py-1 rounded bg-[#090712] border border-violet-500/30 text-slate-200 text-[11px]"
+                            >
+                              <option value="">Sin hoja asignada</option>
+                              {(snapshot?.characters ?? []).map((ch) => (
+                                <option key={ch.id} value={ch.id}>
+                                  {ch.name} (Nv.{ch.level})
+                                </option>
+                              ))}
+                            </select>
                           </td>
                           <td className="py-2.5 pr-2 font-mono text-slate-300">{p.client_ip || 'LAN'}</td>
                           <td className="py-2.5 pr-2 text-slate-400">{parseDeviceLabel(p.user_agent)}</td>

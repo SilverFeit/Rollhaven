@@ -161,6 +161,14 @@ func (s *Server) mountRoutes() {
 		api.Post("/compendium/import", s.handleCompendiumImport)
 		api.Get("/compendium/{category}", s.handleCompendiumList)
 		api.Get("/compendium/{category}/{slug}", s.handleCompendiumGet)
+
+		api.Get("/users", s.handleListUsers)
+		api.Post("/users/login", s.handleUserLogin)
+		api.Get("/characters", s.handleListCharacters)
+		api.Post("/characters", s.handleUpsertCharacter)
+		api.Put("/characters/{id}", s.handleUpsertCharacter)
+		api.Delete("/characters/{id}", s.handleDeleteCharacter)
+		api.Post("/dm/assign-character", s.handleDMAssignCharacter)
 	})
 
 	// Serve uploaded maps & character sheets
@@ -903,4 +911,99 @@ func (s *Server) handleCompendiumImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"imported": count})
+}
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.Store.ListUsers()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	chars, _ := s.Store.ListCharacters("")
+	writeJSON(w, http.StatusOK, map[string]any{"users": users, "characters": chars})
+}
+
+func (s *Server) handleUserLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		UserID   string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+	u, err := s.Store.LoginUser(body.Username, body.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	chars, _ := s.Store.ListCharacters("")
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]any{"user": u, "characters": chars})
+}
+
+func (s *Server) handleListCharacters(w http.ResponseWriter, r *http.Request) {
+	campID := strings.TrimSpace(r.URL.Query().Get("campaign_id"))
+	chars, err := s.Store.ListCharacters(campID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"characters": chars})
+}
+
+func (s *Server) handleUpsertCharacter(w http.ResponseWriter, r *http.Request) {
+	var body store.Character
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON de personaje inválido"})
+		return
+	}
+	if paramID := chi.URLParam(r, "id"); paramID != "" {
+		body.ID = paramID
+	}
+	ch, err := s.Store.UpsertCharacter(body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, ch)
+}
+
+func (s *Server) handleDeleteCharacter(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede eliminar personajes"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.Store.DeleteCharacter(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleDMAssignCharacter(w http.ResponseWriter, r *http.Request) {
+	authorized, _ := s.isDMAuthorized(r)
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Solo el Dungeon Master puede asignar personajes"})
+		return
+	}
+	var body struct {
+		UserID      string `json:"user_id"`
+		PlayerID    string `json:"player_id"`
+		CharacterID string `json:"character_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+	if err := s.Store.AssignCharacter(body.UserID, body.PlayerID, body.CharacterID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.Hub.BroadcastStateSync()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "assigned"})
 }

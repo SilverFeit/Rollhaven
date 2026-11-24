@@ -52,6 +52,8 @@ type StateSnapshot struct {
 	ActiveCampaign   store.Campaign          `json:"active_campaign"`
 	Campaigns        []store.Campaign        `json:"campaigns"`
 	CampaignSessions []store.CampaignSession `json:"campaign_sessions"`
+	Users            []store.User            `json:"users"`
+	Characters       []store.Character       `json:"characters"`
 	Players          []store.Player          `json:"players"`
 	MapEntities      []store.MapEntity       `json:"map_entities"`
 	MapScenes        []store.MapScene        `json:"map_scenes"`
@@ -247,6 +249,8 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 	activeCamp, _ := h.store.GetActiveCampaign()
 	campaigns, _ := h.store.ListCampaigns()
 	campSessions, _ := h.store.ListCampaignSessions(activeCamp.ID)
+	users, _ := h.store.ListUsers()
+	characters, _ := h.store.ListCharacters(activeCamp.ID)
 	players, err := h.store.ListPlayersOrdered()
 	if err != nil {
 		return StateSnapshot{}, err
@@ -316,6 +320,8 @@ func (h *Hub) BuildSnapshotFor(viewerID string, isDM bool) (StateSnapshot, error
 		ActiveCampaign:   activeCamp,
 		Campaigns:        campaigns,
 		CampaignSessions: campSessions,
+		Users:            users,
+		Characters:       characters,
 		Players:          players,
 		MapEntities:      mapEntities,
 		MapScenes:        mapScenes,
@@ -511,8 +517,10 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 	case "JOIN_ROOM":
 		var p struct {
 			PlayerID   string `json:"player_id"`
+			UserID     string `json:"user_id"`
+			Username   string `json:"username"`
 			Name       string `json:"name"`
-			Initiative int    `json:"initiative"`
+			Initiative *int   `json:"initiative"`
 			Race       string `json:"race"`
 			Color      string `json:"color"`
 		}
@@ -531,15 +539,34 @@ func (h *Hub) dispatchMessage(ctx context.Context, c *wsClient, msg WSMessage) {
 				return
 			}
 		}
-		player, err := h.store.UpsertPlayer(pid, p.Name, p.Initiative, p.Race, p.Color, c.clientIP, c.userAgent)
+		initVal := 10
+		if p.Initiative != nil {
+			initVal = *p.Initiative
+		}
+		var player store.Player
+		var userObj *store.User
+		var err error
+		if strings.TrimSpace(p.Username) != "" || strings.TrimSpace(p.UserID) != "" {
+			var u store.User
+			player, u, err = h.store.UpsertPlayerForUser(p.UserID, p.Username, pid, initVal, p.Race, p.Color, c.clientIP, c.userAgent)
+			if err == nil {
+				userObj = &u
+			}
+		} else {
+			player, err = h.store.UpsertPlayer(pid, p.Name, initVal, p.Race, p.Color, c.clientIP, c.userAgent)
+		}
 		if err != nil {
 			h.sendError(ctx, c, err.Error())
 			return
 		}
 		h.setClientPlayerID(c, player.ID)
-		ack, _ := json.Marshal(map[string]any{"player": player})
+		ackPayload := map[string]any{"player": player}
+		if userObj != nil {
+			ackPayload["user"] = userObj
+		}
+		ack, _ := json.Marshal(ackPayload)
 		_ = h.sendToClient(ctx, c, WSMessage{Event: "JOIN_ACK", PlayerID: player.ID, Payload: ack})
-		_, _ = h.store.AppendActionLog(player.ID, player.Name, "JOIN", fmt.Sprintf("Se unió con iniciativa %d", player.Initiative), nil)
+		_, _ = h.store.AppendActionLog(player.ID, player.Name, "JOIN", fmt.Sprintf("Se unió a la mesa (%s)", player.Name), nil)
 		h.BroadcastStateSync()
 
 	case "UPDATE_PROFILE":
@@ -1375,6 +1402,8 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 		MobTargetAC     int                    `json:"mob_target_ac"`
 		MobDmgNotation  string                 `json:"mob_dmg_notation"`
 		MobVisibility   string                 `json:"mob_visibility"`
+		UserID          string                 `json:"user_id"`
+		CharacterID     string                 `json:"character_id"`
 	}
 	if err := json.Unmarshal(payload, &cmd); err != nil {
 		h.sendError(ctx, c, "Payload DM_OVERRIDE inválido")
@@ -1400,6 +1429,19 @@ func (h *Hub) handleDMOverride(ctx context.Context, c *wsClient, payload json.Ra
 			return
 		}
 		_, _ = h.store.AppendActionLog("dm", "Dungeon Master", "DM_OVERRIDE", fmt.Sprintf("Actualizó iniciativa a %d", cmd.Value), nil)
+
+	case "ASSIGN_CHARACTER":
+		uid := strings.TrimSpace(cmd.UserID)
+		if uid == "" && cmd.TargetPlayerID != "" {
+			if pl, err := h.store.GetPlayer(cmd.TargetPlayerID); err == nil {
+				uid = pl.UserID
+			}
+		}
+		if err := h.store.AssignCharacter(uid, cmd.TargetPlayerID, cmd.CharacterID); err != nil {
+			h.sendError(ctx, c, err.Error())
+			return
+		}
+		_ = h.store.AppendAuditEvent(campID, "dm", "Dungeon Master", "ASSIGN_CHARACTER", fmt.Sprintf("Asignó personaje %s al jugador %s", cmd.CharacterID, cmd.TargetPlayerID))
 
 	case "REORDER_PLAYERS":
 		if err := h.store.ReorderPlayers(cmd.PlayerIDs); err != nil {
